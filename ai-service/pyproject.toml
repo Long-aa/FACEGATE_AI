@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "facegate-ai-service"
+version = "1.0.0"
+description = "FaceGate AI Face Recognition Service"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "numpy>=1.26.4",
+    "pillow>=10.3.0",
+    "pydantic>=2.7.1",
+    "pydantic-settings>=2.2.1",
+    "python-dotenv>=1.0.1",
+]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.14"
+typeCheckingMode = "basic"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    networks:
+      - facegate-dev
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    environment:
+      - DATABASE_URL=postgresql://facegate:facegate@postgres:5432/facegate_dev
+      - REDIS_URL=redis://redis:6379
+      - AI_SERVICE_URL=http://ai-service:8001
+      - DEBUG=true
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - facegate-dev
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./ai-service:/app
+      - ./ai-service/models:/app/models
+      - ./ai-service/data:/app/data
+    networks:
+      - facegate-dev
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=facegate
+      - POSTGRES_PASSWORD=facegate
+      - POSTGRES_DB=facegate_dev
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+    networks:
+      - facegate-dev
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - facegate-dev
+
+volumes:
+  postgres-dev-data:
+
+networks:
+  facegate-dev:
+    driver: bridge
