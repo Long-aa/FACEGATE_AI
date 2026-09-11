@@ -2,7 +2,8 @@
 
 import React, { useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { logout } from "@/lib/auth";
 
 interface NavItem {
   href: string;
@@ -41,16 +42,7 @@ const navItems: NavItem[] = [
       </svg>
     ),
   },
-  {
-    href: "/face-registration",
-    label: "Đăng ký khuôn mặt",
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
-        <line x1="19" y1="8" x2="19" y2="14" /><line x1="22" y1="11" x2="16" y2="11" />
-      </svg>
-    ),
-  },
+
   {
     href: "/access-logs",
     label: "Lịch sử",
@@ -112,9 +104,15 @@ const navItems: NavItem[] = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
+
+  const handleLogout = () => {
+    logout();
+    router.replace("/login");
+  };
 
   return (
     <aside
@@ -228,6 +226,8 @@ export function Sidebar() {
       {/* Logout */}
       <div style={{ padding: "12px 8px", borderTop: "1px solid var(--border)" }}>
         <button
+          id="sidebar-logout-btn"
+          onClick={handleLogout}
           style={{
             display: "flex",
             alignItems: "center",

@@ -1,15 +1,24 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { getSession } from "@/lib/auth";
 
 export function TopBar() {
   const [time, setTime] = useState(new Date());
   const [isDark] = useState(true);
   const [mounted, setMounted] = useState(false);
+  const [userInitials, setUserInitials] = useState("QT");
+  const [userName, setUserName] = useState("");
 
   useEffect(() => {
     setMounted(true);
     const t = setInterval(() => setTime(new Date()), 1000);
+    const session = getSession();
+    if (session) {
+      const parts = session.user.name.split(" ");
+      setUserInitials(session.user.avatar || parts.map((p: string) => p[0]).join("").slice(0, 2).toUpperCase());
+      setUserName(session.user.name);
+    }
     return () => clearInterval(t);
   }, []);
 
@@ -173,23 +182,22 @@ export function TopBar() {
         </button>
 
         {/* Avatar */}
-        <div
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: "50%",
-            background: "linear-gradient(135deg, #00D4AA 0%, #3B82F6 100%)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            cursor: "pointer",
-            fontSize: 12,
-            fontWeight: 700,
-            color: "white",
-            border: "2px solid rgba(0,212,170,0.3)",
-          }}
-        >
-          QT
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ textAlign: "right", display: userName ? "block" : "none" }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#F1F5F9", lineHeight: 1 }}>{userName}</div>
+          </div>
+          <div
+            title={userName}
+            style={{
+              width: 34, height: 34, borderRadius: "50%",
+              background: "linear-gradient(135deg, #00D4AA 0%, #3B82F6 100%)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              cursor: "pointer", fontSize: 12, fontWeight: 700, color: "white",
+              border: "2px solid rgba(0,212,170,0.3)",
+            }}
+          >
+            {userInitials}
+          </div>
         </div>
       </div>
     </header>
