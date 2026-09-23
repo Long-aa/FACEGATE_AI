@@ -1,12 +1,14 @@
 from fastapi import APIRouter
-from app.api.v1 import auth, users, roles, faces, recognition, cameras, doors
+from app.api.v1 import auth, users, departments, roles, faces, recognition, cameras, doors
 from app.api.v1 import access_rules, access_logs, alerts, reports, notifications
-from app.api.v1 import audit, system_logs, settings
+from app.api.v1 import audit, system_logs, settings, dashboard
 
 api_router = APIRouter()
 
+api_router.include_router(dashboard.router, prefix="/dashboard", tags=["Dashboard"])
 api_router.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 api_router.include_router(users.router, prefix="/users", tags=["Users"])
+api_router.include_router(departments.router, prefix="/departments", tags=["Departments"])
 api_router.include_router(roles.router, prefix="/roles", tags=["Roles"])
 api_router.include_router(faces.router, prefix="/faces", tags=["Face Profiles"])
 api_router.include_router(recognition.router, prefix="/recognition", tags=["Recognition"])

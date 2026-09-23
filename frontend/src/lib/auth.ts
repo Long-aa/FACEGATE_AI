@@ -1,73 +1,42 @@
-// Mock authentication data & utilities
+import { api } from "./api";
 
 export interface User {
   id: string;
-  username: string;
-  password: string;
+  employee_id: string;
   name: string;
-  role: "super_admin" | "admin" | "security" | "viewer";
+  email?: string;
+  role: string;
   avatar: string;
   department: string;
-  lastLogin?: string;
   permissions: string[];
 }
 
-// Dữ liệu ảo để đăng nhập
-export const MOCK_USERS: User[] = [
-  {
-    id: "USR-001",
-    username: "admin",
-    password: "Admin@123",
-    name: "Nguyễn Văn Admin",
-    role: "super_admin",
-    avatar: "NV",
-    department: "Quản Trị Hệ Thống",
-    lastLogin: "2026-09-08T06:00:00Z",
-    permissions: ["*"],
-  },
-  {
-    id: "USR-002",
-    username: "security",
-    password: "Security@123",
-    name: "Trần Bảo An",
-    role: "security",
-    avatar: "TB",
-    department: "Bảo Vệ & An Ninh",
-    lastLogin: "2026-09-08T07:30:00Z",
-    permissions: ["cameras.view", "alerts.view", "doors.control", "access-logs.view"],
-  },
-  {
-    id: "USR-003",
-    username: "manager",
-    password: "Manager@123",
-    name: "Lê Thị Quản Lý",
-    role: "admin",
-    avatar: "LQ",
-    department: "Quản Lý Vận Hành",
-    lastLogin: "2026-09-07T14:00:00Z",
-    permissions: ["cameras.view", "users.manage", "reports.view", "access-logs.view"],
-  },
-];
-
-const SESSION_KEY = "facegate_session";
-
 export interface Session {
-  user: Omit<User, "password">;
+  user: User;
   token: string;
   expiresAt: number;
 }
 
-export function login(username: string, password: string): Session | null {
-  const user = MOCK_USERS.find(
-    (u) => u.username === username && u.password === password
-  );
-  if (!user) return null;
+const SESSION_KEY = "facegate_session";
 
-  const { password: _, ...userWithoutPassword } = user;
+export async function login(usernameOrEmail: string, password: string): Promise<Session> {
+  const res = await api.auth.login(usernameOrEmail, password);
+  
+  const user: User = {
+    id: res.user.id,
+    employee_id: res.user.employee_id,
+    name: res.user.name,
+    email: res.user.email,
+    role: res.user.role,
+    avatar: res.user.name.split(" ").map((n: string) => n[0]).slice(-2).join(""),
+    department: res.user.department || "Quản Trị",
+    permissions: res.user.permissions || ["*"],
+  };
+
   const session: Session = {
-    user: userWithoutPassword,
-    token: `mock_token_${Math.random().toString(36).slice(2)}`,
-    expiresAt: Date.now() + 8 * 60 * 60 * 1000, // 8 hours
+    user,
+    token: res.access_token,
+    expiresAt: res.expires_at * 1000,
   };
 
   if (typeof window !== "undefined") {
@@ -77,7 +46,10 @@ export function login(username: string, password: string): Session | null {
   return session;
 }
 
-export function logout(): void {
+export async function logout(): Promise<void> {
+  try {
+    await api.auth.logout();
+  } catch {}
   if (typeof window !== "undefined") {
     localStorage.removeItem(SESSION_KEY);
   }
@@ -89,7 +61,7 @@ export function getSession(): Session | null {
     const raw = localStorage.getItem(SESSION_KEY);
     if (!raw) return null;
     const session: Session = JSON.parse(raw);
-    if (session.expiresAt < Date.now()) {
+    if (session.expiresAt && session.expiresAt < Date.now()) {
       localStorage.removeItem(SESSION_KEY);
       return null;
     }

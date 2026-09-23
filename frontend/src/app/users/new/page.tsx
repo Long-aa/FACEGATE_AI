@@ -4,6 +4,8 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Sidebar } from "@/components/navigation/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { useRouter } from "next/navigation";
+import { toast as notify } from "@/components/ui/ToastNotification";
+import { api } from "@/lib/api";
 
 // Shared input style
 const inp: React.CSSProperties = {
@@ -293,6 +295,23 @@ export default function NewUserPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [selectedCameraId, setSelectedCameraId] = useState<string>("");
 
+  const [departmentsList, setDepartmentsList] = useState<string[]>([
+    "Khối Kỹ thuật & R&D",
+    "Khối Vận hành & An ninh",
+    "Kế toán & Tài chính",
+    "Kinh doanh & Tiếp thị",
+    "Khối Nhân sự & Đào tạo",
+    "Ban Giám Đốc",
+  ]);
+
+  useEffect(() => {
+    api.departments.list().then((res) => {
+      if (res && Array.isArray(res.items) && res.items.length > 0) {
+        setDepartmentsList(res.items.map((d: any) => d.name));
+      }
+    }).catch(() => {});
+  }, []);
+
   // Avatar & Webcam capture state
   const [avatarUrl, setAvatarUrl] = useState<string>("https://i.pravatar.cc/150?u=1");
   const [avatarError, setAvatarError] = useState<string>("");
@@ -354,8 +373,7 @@ export default function NewUserPage() {
   };
 
   const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 3500);
+    notify.success(msg);
   };
 
   // Avatar file upload handler (IT01-008)
@@ -655,7 +673,7 @@ export default function NewUserPage() {
                       style={{ ...inp, border: errors.department ? "1px solid #ef4444" : "1px solid rgba(255,255,255,0.1)" }}
                     >
                       <option value="">-- Chọn phòng ban --</option>
-                      {["Khối Kỹ thuật & R&D","Kế toán","Kinh doanh","Khối Vận hành","Nhân sự"].map(d => (
+                      {departmentsList.map(d => (
                         <option key={d} value={d}>{d}</option>
                       ))}
                     </select>

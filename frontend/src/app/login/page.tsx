@@ -2,7 +2,23 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { login, getSession, MOCK_USERS } from "@/lib/auth";
+import { login, getSession } from "@/lib/auth";
+
+function Spinner() {
+  return (
+    <span
+      className="animate-spin"
+      style={{
+        display: "inline-block",
+        width: 16,
+        height: 16,
+        border: "2px solid rgba(255,255,255,0.3)",
+        borderTopColor: "#fff",
+        borderRadius: "50%",
+      }}
+    />
+  );
+}
 
 // ─── Particle canvas animation ───────────────────────────────────────────────
 function ParticleCanvas() {
@@ -163,29 +179,13 @@ function FaceGateLogo() {
   );
 }
 
-// ─── Loading spinner ──────────────────────────────────────────────────────────
-function Spinner() {
-  return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-      <div style={{
-        width: 18, height: 18,
-        border: "2px solid rgba(255,255,255,0.2)",
-        borderTopColor: "white",
-        borderRadius: "50%",
-        animation: "spin 0.7s linear infinite",
-      }} />
-      <span>Đang xác thực...</span>
-    </div>
-  );
-}
-
-// ─── Demo credentials hint card ───────────────────────────────────────────────
+// ─── // ─── Demo credentials hint card ───────────────────────────────────────────────
 function DemoHint({ onFill }: { onFill: (u: string, p: string) => void }) {
   const [open, setOpen] = useState(false);
   const demos = [
-    { label: "Super Admin", username: "admin", password: "Admin@123", color: "#EF4444" },
-    { label: "Bảo Vệ", username: "security", password: "Security@123", color: "#00D4AA" },
-    { label: "Quản Lý", username: "manager", password: "Manager@123", color: "#8B5CF6" },
+    { label: "Super Admin", username: "admin@facegate.ai", password: "Admin@123", color: "#EF4444" },
+    { label: "Bảo Vệ", username: "security@facegate.ai", password: "Password@123", color: "#00D4AA" },
+    { label: "Quản Lý", username: "manager@facegate.ai", password: "Password@123", color: "#8B5CF6" },
   ];
 
   return (
@@ -220,14 +220,14 @@ function DemoHint({ onFill }: { onFill: (u: string, p: string) => void }) {
             border: "1px solid rgba(0,212,170,0.2)",
             borderRadius: 12,
             padding: 16,
-            minWidth: 260,
+            minWidth: 280,
             boxShadow: "0 -20px 60px rgba(0,0,0,0.5)",
             animation: "fadeInUp 0.2s ease both",
             zIndex: 10,
           }}
         >
           <p style={{ color: "#94A3B8", fontSize: 11, marginBottom: 10, textTransform: "uppercase", letterSpacing: 1 }}>
-            Tài Khoản Demo
+            Tài Khoản Database Thật
           </p>
           {demos.map((d) => (
             <button
@@ -253,7 +253,7 @@ function DemoHint({ onFill }: { onFill: (u: string, p: string) => void }) {
                 <div style={{ width: 8, height: 8, borderRadius: "50%", background: d.color }} />
                 <div>
                   <div style={{ fontWeight: 600, color: "#F1F5F9" }}>{d.label}</div>
-                  <div style={{ fontSize: 11, color: "#64748B" }}>{d.username} / {d.password}</div>
+                  <div style={{ fontSize: 11, color: "#64748B" }}>{d.username}</div>
                 </div>
               </div>
               <span style={{ fontSize: 11, color: "#00D4AA", opacity: 0.7 }}>Dùng →</span>
@@ -295,17 +295,20 @@ export default function LoginPage() {
     setLoading(true);
     setError("");
 
-    // Simulate network delay for realism
-    await new Promise((r) => setTimeout(r, 1200));
-
-    const session = login(username, password);
-    if (session) {
-      setSuccess(true);
-      await new Promise((r) => setTimeout(r, 800));
-      router.replace("/dashboard");
-    } else {
+    try {
+      const session = await login(username, password);
+      if (session) {
+        setSuccess(true);
+        await new Promise((r) => setTimeout(r, 600));
+        router.replace("/dashboard");
+      } else {
+        setLoading(false);
+        setError("Sai email/tên đăng nhập hoặc mật khẩu.");
+        triggerShake();
+      }
+    } catch (err: any) {
       setLoading(false);
-      setError("Sai tên đăng nhập hoặc mật khẩu. Vui lòng thử lại.");
+      setError(err?.message || "Không thể kết nối đến máy chủ xác thực.");
       triggerShake();
     }
   };

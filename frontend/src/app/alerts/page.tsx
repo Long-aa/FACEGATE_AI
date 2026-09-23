@@ -1,8 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { Sidebar } from "@/components/navigation/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
+import { api } from "@/lib/api";
+import { toast } from "@/components/ui/ToastNotification";
 
 type Severity = "CRITICAL" | "WARNING" | "INFO";
 type AlertStatus = "UNRESOLVED" | "INVESTIGATING" | "PENDING" | "RESOLVED";
@@ -17,14 +19,6 @@ interface Alert {
   severity: Severity;
   status: AlertStatus;
 }
-
-const mockAlerts: Alert[] = [
-  { id: "1", type: "Người không xác định", description: "Confidence: 98%", location: "Main Entrance", camera: "CAM-04", time: "10:42 SA", severity: "CRITICAL", status: "UNRESOLVED" },
-  { id: "2", type: "Độ tin cậy thấp", description: "Match: 64% (Req. 85%)", location: "Server Room Hall", camera: "CAM-12", time: "10:15 SA", severity: "WARNING", status: "INVESTIGATING" },
-  { id: "3", type: "Camera Offline", description: "Connection Lost", location: "East Parking", camera: "CAM-09", time: "09:30 SA", severity: "WARNING", status: "PENDING" },
-  { id: "4", type: "Cửa bị mở bất thường", description: "Held Open > 60s", location: "Loading Dock", camera: "DOOR-02", time: "08:45 SA", severity: "INFO", status: "RESOLVED" },
-  { id: "5", type: "Người không xác định", description: "Confidence: 92%", location: "Lobby", camera: "CAM-01", time: "02:11 SA", severity: "CRITICAL", status: "RESOLVED" },
-];
 
 const severityConfig: Record<Severity, { color: string; bg: string; icon: React.ReactNode }> = {
   CRITICAL: {
@@ -49,17 +43,104 @@ const statusConfig: Record<AlertStatus, { color: string; bg: string; border: str
 };
 
 export default function AlertsPage() {
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [loading, setLoading] = useState(true);
   const [hovered, setHovered] = useState<string | null>(null);
-  const [acknowledged, setAcknowledged] = useState<Set<string>>(new Set());
+  const [selectedAlert, setSelectedAlert] = useState<Alert | null>(null);
+  const [severityFilter, setSeverityFilter] = useState<"ALL" | Severity>("ALL");
+  const [dbCounts, setDbCounts] = useState({
+    total: 0,
+    critical: 0,
+    warning: 0,
+    info: 0,
+    unresolved: 0,
+  });
 
-  const counts = {
-    total: mockAlerts.length,
-    critical: mockAlerts.filter((a) => a.severity === "CRITICAL").length,
-    warning: mockAlerts.filter((a) => a.severity === "WARNING").length,
-    info: mockAlerts.filter((a) => a.severity === "INFO").length,
+  // Load real alerts from DB
+  const loadAlerts = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.alerts.list({
+        severity: severityFilter !== "ALL" ? severityFilter : undefined,
+      });
+
+      if (data && data.total !== undefined) {
+        setDbCounts({
+          total: data.total ?? 0,
+          critical: data.critical_count ?? 0,
+          warning: data.warning_count ?? 0,
+          info: data.info_count ?? 0,
+          unresolved: data.unresolved_count ?? 0,
+        });
+      }
+
+      const alertItems = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.items)
+        ? data.items
+        : [];
+
+      const mapped: Alert[] = alertItems.map((a: any) => {
+        const sev: Severity = (a.severity === "CRITICAL" ? "CRITICAL" : a.severity === "WARNING" ? "WARNING" : "INFO");
+        const stat: AlertStatus = (a.status === "RESOLVED" ? "RESOLVED" : a.status === "INVESTIGATING" ? "INVESTIGATING" : a.status === "PENDING" ? "PENDING" : "UNRESOLVED");
+        const ts = a.created_at || a.timestamp;
+        const timeStr = ts ? new Date(ts).toLocaleTimeString("vi-VN") : "10:42 SA";
+        return {
+          id: a.id,
+          type: a.alert_type || "Cảnh báo an ninh",
+          description: a.description || "Phát hiện sự kiện bất thường",
+          location: a.location || "Cổng chính",
+          camera: a.camera_name || "CAM-01",
+          time: timeStr,
+          severity: sev,
+          status: stat,
+        };
+      });
+      setAlerts(mapped);
+      if (mapped.length > 0) {
+        setSelectedAlert(mapped[0]);
+      }
+    } catch (err) {
+      console.error("Failed to load alerts from DB:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [severityFilter]);
+
+  useEffect(() => {
+    loadAlerts();
+  }, [loadAlerts]);
+
+  // Acknowledge all alerts in DB
+  const handleAckAll = async () => {
+    try {
+      await api.alerts.acknowledgeAll();
+      toast.success("Đã xác nhận toàn bộ cảnh báo an ninh trong CSDL!", "XÁC NHẬN CẢNH BÁO");
+      await loadAlerts();
+    } catch (err) {
+      console.error(err);
+      toast.error("Lỗi khi xác nhận cảnh báo trong CSDL.", "THAO TÁC THẤT BẠI");
+    }
   };
 
-  const handleAckAll = () => setAcknowledged(new Set(mockAlerts.map((a) => a.id)));
+  // Resolve single alert in DB
+  const handleResolve = async (id: string) => {
+    try {
+      await api.alerts.resolve(id, "Đã kiểm tra & xác nhận an toàn bởi Quản trị viên");
+      toast.success("Đã đánh dấu xử lý cảnh báo thành công!", "XỬ LÝ AN NINH");
+      await loadAlerts();
+    } catch (err) {
+      console.error(err);
+      toast.error("Lỗi khi cập nhật trạng thái cảnh báo.", "THAO TÁC THẤT BẠI");
+    }
+  };
+
+  const counts = {
+    total: dbCounts.total || alerts.length,
+    critical: dbCounts.critical || alerts.filter((a) => a.severity === "CRITICAL").length,
+    warning: dbCounts.warning || alerts.filter((a) => a.severity === "WARNING").length,
+    info: dbCounts.info || alerts.filter((a) => a.severity === "INFO").length,
+  };
 
   return (
     <div style={{ display: "flex", height: "100vh", background: "var(--bg-primary)", overflow: "hidden" }}>
@@ -71,21 +152,26 @@ export default function AlertsPage() {
           {/* Header */}
           <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
             <div>
-              <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>Cảnh báo bảo mật</h1>
-              <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13 }}>Phát hiện mối đe dọa và giám sát bất thường theo thời gian thực.</p>
+              <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--text-primary)" }}>Cảnh báo bảo mật (Dữ liệu CSDL Thực)</h1>
+              <p style={{ color: "var(--text-muted)", marginTop: 4, fontSize: 13 }}>Phát hiện mối đe dọa và giám sát bất thường theo thời gian thực từ PostgreSQL.</p>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)", borderRadius: 10, color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
-                Tất cả mức độ
-              </button>
-              <button style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)", borderRadius: 10, color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                24 giờ qua
-              </button>
-              <button onClick={handleAckAll} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 10, color: "var(--accent-red)", fontSize: 12, fontWeight: 500, cursor: "pointer" }}>
+              <select
+                value={severityFilter}
+                onChange={e => setSeverityFilter(e.target.value as any)}
+                style={{ padding: "8px 14px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)", borderRadius: 10, color: "var(--text-secondary)", fontSize: 12, cursor: "pointer", outline: "none" }}
+              >
+                <option value="ALL">Tất cả mức độ</option>
+                <option value="CRITICAL">Nghiêm trọng (CRITICAL)</option>
+                <option value="WARNING">Cảnh báo (WARNING)</option>
+                <option value="INFO">Thông tin (INFO)</option>
+              </select>
+              <button
+                onClick={handleAckAll}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 10, color: "var(--accent-red)", fontSize: 12, fontWeight: 500, cursor: "pointer" }}
+              >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                Xác nhận tất cả
+                Xác nhận tất cả trong CSDL
               </button>
             </div>
           </div>
@@ -93,10 +179,10 @@ export default function AlertsPage() {
           {/* Stats */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
             {[
-              { label: "TOTAL ALERTS", value: counts.total, color: "var(--text-primary)", border: "var(--border)", bg: "var(--bg-card)", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg> },
-              { label: "CRITICAL", value: counts.critical, color: "var(--accent-red)", border: "rgba(239,68,68,0.3)", bg: "rgba(239,68,68,0.06)", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> },
-              { label: "WARNING", value: counts.warning, color: "var(--accent-orange)", border: "rgba(249,115,22,0.3)", bg: "rgba(249,115,22,0.06)", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> },
-              { label: "INFO", value: counts.info, color: "var(--accent-blue)", border: "rgba(59,130,246,0.3)", bg: "rgba(59,130,246,0.06)", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg> },
+              { label: "TỔNG SỐ CẢNH BÁO", value: counts.total, color: "var(--text-primary)", border: "var(--border)", bg: "var(--bg-card)", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/><line x1="2" y1="20" x2="22" y2="20"/></svg> },
+              { label: "NGHIÊM TRỌNG (CRITICAL)", value: counts.critical, color: "var(--accent-red)", border: "rgba(239,68,68,0.3)", bg: "rgba(239,68,68,0.06)", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> },
+              { label: "CẢNH BÁO (WARNING)", value: counts.warning, color: "var(--accent-orange)", border: "rgba(249,115,22,0.3)", bg: "rgba(249,115,22,0.06)", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> },
+              { label: "THÔNG TIN (INFO)", value: counts.info, color: "var(--accent-blue)", border: "rgba(59,130,246,0.3)", bg: "rgba(59,130,246,0.06)", icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg> },
             ].map((stat) => (
               <div key={stat.label} style={{ background: stat.bg, border: `1px solid ${stat.border}`, borderRadius: 14, padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <div>
@@ -115,7 +201,7 @@ export default function AlertsPage() {
             {/* Alerts table */}
             <div style={{ flex: 1, background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden", display: "flex", flexDirection: "column" }}>
               <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)" }}>
-                <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Mối đe dọa đang hoạt động</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Mối đe dọa đang hoạt động trong CSDL</div>
               </div>
               <div style={{ overflowY: "auto", flex: 1 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -127,109 +213,124 @@ export default function AlertsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {mockAlerts.map((alert) => {
-                      const sev = severityConfig[alert.severity];
-                      const stat = statusConfig[alert.status];
-                      const isAck = acknowledged.has(alert.id);
-                      return (
-                        <tr key={alert.id}
-                          onMouseEnter={() => setHovered(alert.id)}
-                          onMouseLeave={() => setHovered(null)}
-                          style={{ borderBottom: "1px solid var(--border)", background: hovered === alert.id ? "rgba(255,255,255,0.025)" : "transparent", transition: "background 0.15s", opacity: isAck ? 0.5 : 1 }}>
-                          <td style={{ padding: "14px 14px 14px 16px" }}>
-                            <div style={{ width: 8, height: 8, borderRadius: "50%", background: sev.color, boxShadow: `0 0 6px ${sev.color}` }} />
-                          </td>
-                          <td style={{ padding: "14px" }}>
-                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                              <div style={{ width: 32, height: 32, borderRadius: 8, background: sev.bg, display: "flex", alignItems: "center", justifyContent: "center", color: sev.color, flexShrink: 0 }}>
-                                {sev.icon}
+                    {loading ? (
+                      <tr>
+                        <td colSpan={6} style={{ padding: "30px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
+                          Đang tải danh sách cảnh báo từ CSDL...
+                        </td>
+                      </tr>
+                    ) : alerts.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} style={{ padding: "30px", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
+                          Không có cảnh báo nào trong cơ sở dữ liệu.
+                        </td>
+                      </tr>
+                    ) : (
+                      alerts.map((alert) => {
+                        const sev = severityConfig[alert.severity];
+                        const stat = statusConfig[alert.status];
+                        const isSelected = selectedAlert?.id === alert.id;
+                        return (
+                          <tr key={alert.id}
+                            onClick={() => setSelectedAlert(alert)}
+                            onMouseEnter={() => setHovered(alert.id)}
+                            onMouseLeave={() => setHovered(null)}
+                            style={{ borderBottom: "1px solid var(--border)", background: isSelected ? "rgba(0,212,170,0.06)" : hovered === alert.id ? "rgba(255,255,255,0.025)" : "transparent", transition: "background 0.15s", cursor: "pointer" }}>
+                            <td style={{ padding: "14px 14px 14px 16px" }}>
+                              <div style={{ width: 8, height: 8, borderRadius: "50%", background: sev.color, boxShadow: `0 0 6px ${sev.color}` }} />
+                            </td>
+                            <td style={{ padding: "14px" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                                <div style={{ width: 32, height: 32, borderRadius: 8, background: sev.bg, display: "flex", alignItems: "center", justifyContent: "center", color: sev.color, flexShrink: 0 }}>
+                                  {sev.icon}
+                                </div>
+                                <div>
+                                  <div style={{ fontSize: 13, fontWeight: 600, color: sev.color }}>{alert.type}</div>
+                                  <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{alert.description}</div>
+                                </div>
                               </div>
-                              <div>
-                                <div style={{ fontSize: 13, fontWeight: 600, color: sev.color }}>{alert.type}</div>
-                                <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{alert.description}</div>
-                              </div>
-                            </div>
-                          </td>
-                          <td style={{ padding: "14px" }}>
-                            <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)" }}>{alert.camera}</div>
-                            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>({alert.location})</div>
-                          </td>
-                          <td style={{ padding: "14px", fontSize: 13, color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{alert.time}</td>
-                          <td style={{ padding: "14px" }}>
-                            <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, background: stat.bg, color: stat.color, border: `1px solid ${stat.border}` }}>
-                              {alert.status}
-                            </span>
-                          </td>
-                          <td style={{ padding: "14px" }}>
-                            {alert.status === "UNRESOLVED" ? (
-                              <button style={{ padding: "5px 12px", background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.25)", borderRadius: 6, color: "var(--accent-blue)", fontSize: 12, fontWeight: 500, cursor: "pointer" }}>Review</button>
-                            ) : alert.status === "INVESTIGATING" ? (
-                              <button style={{ padding: "5px 12px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>Details</button>
-                            ) : alert.status === "PENDING" ? (
-                              <button style={{ padding: "5px 12px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-secondary)", fontSize: 12, cursor: "pointer" }}>Ping</button>
-                            ) : (
-                              <button style={{ padding: "5px 12px", background: "rgba(255,255,255,0.04)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text-muted)", fontSize: 12, cursor: "pointer" }}>Log</button>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                            </td>
+                            <td style={{ padding: "14px" }}>
+                              <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)" }}>{alert.camera}</div>
+                              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>({alert.location})</div>
+                            </td>
+                            <td style={{ padding: "14px", fontSize: 13, color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{alert.time}</td>
+                            <td style={{ padding: "14px" }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 6, background: stat.bg, color: stat.color, border: `1px solid ${stat.border}` }}>
+                                {alert.status}
+                              </span>
+                            </td>
+                            <td style={{ padding: "14px" }}>
+                              {alert.status === "UNRESOLVED" ? (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); handleResolve(alert.id); }}
+                                  style={{ padding: "5px 12px", background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.25)", borderRadius: 6, color: "var(--accent-blue)", fontSize: 12, fontWeight: 500, cursor: "pointer" }}
+                                >
+                                  Xử lý ngay
+                                </button>
+                              ) : (
+                                <span style={{ fontSize: 11, color: "var(--accent-green)", fontWeight: 600 }}>✓ Đã xử lý</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
                   </tbody>
                 </table>
-                <div style={{ padding: "14px 20px", borderTop: "1px solid var(--border)", textAlign: "center" }}>
-                  <button style={{ color: "var(--accent-teal)", fontSize: 13, background: "none", border: "none", cursor: "pointer", fontWeight: 500 }}>Xem toàn bộ lịch sử</button>
-                </div>
               </div>
             </div>
 
             {/* Live evidence panel */}
-            <div style={{ width: 260, background: "var(--bg-card)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 14, overflow: "hidden", flexShrink: 0 }}>
-              {/* Live badge */}
+            <div style={{ width: 280, background: "var(--bg-card)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: 14, overflow: "hidden", flexShrink: 0 }}>
               <div style={{ padding: "10px 14px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(239,68,68,0.05)" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <div style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--accent-red)", animation: "blink 1s infinite" }} />
-                  <span style={{ fontSize: 11, fontWeight: 800, color: "var(--accent-red)", letterSpacing: "0.1em" }}>LIVE EVIDENCE</span>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: "var(--accent-red)", letterSpacing: "0.1em" }}>CHI TIẾT ĐỐI SOÁT</span>
                 </div>
-                <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>CAM-04</span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 600 }}>{selectedAlert?.camera || "CAM-01"}</span>
               </div>
 
               {/* Evidence footage */}
               <div style={{ position: "relative", background: "#050d18", height: 150, overflow: "hidden" }}>
                 <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse at 60% 40%, #0d1a2c, #050d18)" }} />
                 <div style={{ position: "absolute", inset: 0, backgroundImage: "linear-gradient(rgba(239,68,68,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,0.03) 1px, transparent 1px)", backgroundSize: "30px 30px" }} />
-                {/* Unknown person box */}
-                <div style={{ position: "absolute", left: "52%", top: "10%", width: 60, height: 80, border: "1px solid rgba(239,68,68,0.7)", boxShadow: "0 0 12px rgba(239,68,68,0.3)" }}>
-                  <div style={{ position: "absolute", top: 2, right: -50, background: "rgba(239,68,68,0.9)", borderRadius: 4, padding: "2px 6px" }}>
-                    <div style={{ fontSize: 8, fontWeight: 700, color: "white" }}>ID: UNKNOV</div>
-                    <div style={{ fontSize: 8, color: "rgba(255,255,255,0.8)" }}>Match:</div>
-                    <div style={{ fontSize: 8, fontWeight: 700, color: "white" }}>Threat:HIGH</div>
-                  </div>
+                
+                <div style={{ position: "absolute", left: "40%", top: "20%", width: 70, height: 90, border: "1px solid rgba(239,68,68,0.7)", boxShadow: "0 0 12px rgba(239,68,68,0.3)", display: "flex", alignItems: "center", justifyContent: "center", color: "#EF4444", fontSize: 24, fontWeight: 800 }}>
+                  ?
                 </div>
-                {/* REC indicator */}
+
                 <div style={{ position: "absolute", bottom: 8, left: 10, display: "flex", alignItems: "center", gap: 4 }}>
                   <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--accent-red)", animation: "blink 1s infinite" }} />
                   <span style={{ fontSize: 10, fontWeight: 700, color: "var(--accent-red)", letterSpacing: "0.05em" }}>REC</span>
-                  <span style={{ fontSize: 10, color: "var(--text-muted)" }}>• 10:42:15</span>
+                  <span style={{ fontSize: 10, color: "var(--text-muted)" }}>• {selectedAlert?.time || "10:42:15"}</span>
                 </div>
               </div>
 
               {/* Info */}
               <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 12 }}>
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)" }}>Unauthorized Access Attempt</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)" }}>{selectedAlert?.type || "Cảnh báo an ninh"}</div>
                   <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.5 }}>
-                    Subject recognized as not belonging to any authorized access group. Main entrance doors remain locked.
+                    {selectedAlert?.description || "Phát hiện đối tượng lạ không có hồ sơ sinh trắc học được lưu trong PostgreSQL."}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--accent-teal)", marginTop: 4 }}>
+                    Vị trí: {selectedAlert?.location || "Cửa chính"}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "9px", background: "linear-gradient(135deg,#00D4AA,#3B82F6)", border: "none", borderRadius: 8, color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                    Dispatch
-                  </button>
-                  <button style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "9px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, color: "var(--accent-red)", fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-                    Lockdown
-                  </button>
+                  {selectedAlert?.status === "UNRESOLVED" ? (
+                    <button
+                      onClick={() => handleResolve(selectedAlert.id)}
+                      style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "9px", background: "linear-gradient(135deg,#00D4AA,#3B82F6)", border: "none", borderRadius: 8, color: "white", fontSize: 12, fontWeight: 600, cursor: "pointer" }}
+                    >
+                      Xác nhận giải quyết
+                    </button>
+                  ) : (
+                    <div style={{ width: "100%", padding: "8px", textAlign: "center", background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.3)", borderRadius: 8, color: "var(--accent-green)", fontSize: 12, fontWeight: 600 }}>
+                      ✓ Đã giải quyết an toàn
+                    </div>
+                  )}
                 </div>
               </div>
             </div>

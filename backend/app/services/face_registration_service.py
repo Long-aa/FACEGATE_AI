@@ -1,4 +1,4 @@
-﻿"""
+"""
 Face Registration Service - FRM01 through FRM08.
 
 Each public function maps directly to one FRM sheet in the unit-test spec
@@ -146,15 +146,18 @@ def open_camera(camera_index: Any, cv2_module: Any = None):
       UTCID06 (A) : frame is None or empty -> FrameCaptureException
       UTCID07 (B) : frame resolution invalid -> CameraConfigurationException
     """
-    import cv2 as _cv2
-
-    if cv2_module is None:
-        cv2_module = _cv2
-
     # UTCID02 – index validation
     if camera_index is None or not isinstance(camera_index, int):
         logger.warning("Invalid camera index")
         raise CameraInitializationException("Invalid camera index")
+
+    if cv2_module is None:
+        try:
+            import cv2 as _cv2
+            cv2_module = _cv2
+        except ImportError:
+            logger.warning("Cannot open camera: OpenCV not installed")
+            raise CameraInitializationException("Cannot open camera")
 
     # Open device
     try:
@@ -354,11 +357,17 @@ def preprocess_face(
         raise PreprocessException("Image contains invalid values")
 
     # Resize to target
-    import cv2
     if img.ndim == 3 and img.shape[2] == 4:
         img = img[:, :, :3]  # drop alpha
 
-    resized = cv2.resize(img, (target_size[1], target_size[0]))
+    try:
+        import cv2
+        resized = cv2.resize(img, (target_size[1], target_size[0]))
+    except ImportError:
+        # Fallback nearest-neighbor resize for testing environments without cv2-binary
+        y_idx = (np.linspace(0, img.shape[0] - 1, target_size[0])).astype(int)
+        x_idx = (np.linspace(0, img.shape[1] - 1, target_size[1])).astype(int)
+        resized = img[np.ix_(y_idx, x_idx)]
 
     # Normalise to [0, 1]
     if resized.max() > 1.0:

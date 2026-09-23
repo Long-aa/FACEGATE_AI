@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { ToastContainer } from "@/components/ui/ToastNotification";
 
 export const metadata: Metadata = {
   title: "FaceGate AI — Hệ Thống Kiểm Soát An Toàn",
@@ -21,7 +22,10 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        <ToastContainer />
+      </body>
     </html>
   );
 }

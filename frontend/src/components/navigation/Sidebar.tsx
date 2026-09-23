@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { logout } from "@/lib/auth";
+import { api } from "@/lib/api";
 
 interface NavItem {
   href: string;
@@ -39,6 +40,19 @@ const navItems: NavItem[] = [
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
         <path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+    ),
+  },
+  {
+    href: "/departments",
+    label: "Quản lý phòng ban",
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="4" y="2" width="16" height="20" rx="2" />
+        <path d="M9 22v-4h6v4" />
+        <path d="M8 6h.01" /><path d="M16 6h.01" /><path d="M12 6h.01" />
+        <path d="M8 10h.01" /><path d="M16 10h.01" /><path d="M12 10h.01" />
+        <path d="M8 14h.01" /><path d="M16 14h.01" /><path d="M12 14h.01" />
       </svg>
     ),
   },
@@ -83,7 +97,6 @@ const navItems: NavItem[] = [
   {
     href: "/alerts",
     label: "Cảnh báo",
-    badge: 3,
     icon: (
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" />
@@ -106,11 +119,30 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
+  const [unresolvedAlerts, setUnresolvedAlerts] = useState<number>(0);
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
 
-  const handleLogout = () => {
-    logout();
+  useEffect(() => {
+    let isMounted = true;
+    const fetchAlertCount = async () => {
+      try {
+        const data = await api.alerts.getUnresolvedCount();
+        if (isMounted) {
+          setUnresolvedAlerts(data.count || 0);
+        }
+      } catch {}
+    };
+    fetchAlertCount();
+    const interval = setInterval(fetchAlertCount, 10000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const handleLogout = async () => {
+    await logout();
     router.replace("/login");
   };
 
@@ -202,7 +234,7 @@ export function Sidebar() {
             >
               <span style={{ flexShrink: 0, opacity: active ? 1 : 0.7 }}>{item.icon}</span>
               <span style={{ fontSize: 13, fontWeight: active ? 600 : 400, flex: 1 }}>{item.label}</span>
-              {item.badge && (
+              {((item.href === "/alerts" && unresolvedAlerts > 0) || item.badge) && (
                 <span
                   style={{
                     background: "var(--accent-red)",
@@ -215,7 +247,7 @@ export function Sidebar() {
                     textAlign: "center",
                   }}
                 >
-                  {item.badge}
+                  {item.href === "/alerts" ? unresolvedAlerts : item.badge}
                 </span>
               )}
             </Link>
