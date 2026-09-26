@@ -1,8 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.websocket.manager import ws_manager
 
 setup_logging()
 
@@ -24,6 +25,23 @@ app.add_middleware(
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
 
+@app.websocket("/ws/events")
+@app.websocket(f"{settings.API_V1_STR}/recognition/ws")
+async def websocket_events_endpoint(websocket: WebSocket):
+    """Realtime WebSocket endpoint streaming recognition events, door states, and alerts."""
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception:
+        ws_manager.disconnect(websocket)
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "FaceGate AI Backend"}
+

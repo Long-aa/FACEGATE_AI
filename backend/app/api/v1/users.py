@@ -12,9 +12,11 @@ from sqlalchemy.orm import Session
 from app.core.security import get_current_active_admin, get_current_user, get_password_hash
 from app.database.session import get_db
 from app.models.access_log import AccessLog
+from app.models.access_rule import AccessRule
 from app.models.audit import AuditLog
 from app.models.face import FaceProfile
 from app.models.user import Role, User
+from app.websocket.manager import ws_manager
 from app.schemas.common import (
     AccessLogOut,
     UserCreate,
@@ -268,13 +270,20 @@ def update_user_status(
 
 
 @router.delete("/{user_id}")
-def delete_user(
+async def delete_user(
     user_id: str,
     current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    Delete a user from the database (cascades face profile and access rules).
+    Delete a user from PostgreSQL database:
+    1. Check authorization and prevent deletion of root admin (EMP-0001, is_superuser).
+    2. Explicitly remove associated FaceProfile biometric records.
+    3. Remove user-specific AccessRules.
+    4. Disconnect user_id on AccessLogs to maintain security audit history.
+    5. Write AuditLog entry.
+    6. Delete User entity.
+    7. Broadcast real-time WebSocket event USER_DELETED.
     """
     user = db.query(User).filter((User.id == user_id) | (User.employee_id == user_id)).first()
     if not user:
@@ -283,25 +292,70 @@ def delete_user(
             detail="Không tìm thấy người dùng",
         )
 
-    if user.is_superuser:
+    if user.is_superuser or user.employee_id == "EMP-0001":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Không thể xóa tài khoản Quản trị viên tối cao",
+            detail="Không thể xóa tài khoản Quản trị viên tối cao (EMP-0001) của hệ thống",
         )
 
+    user_full_name = user.full_name
+    employee_code = user.employee_id
+    user_uuid = user.id
+
+    # 1. Clean up biometric FaceProfile
+    db.query(FaceProfile).filter(
+        (FaceProfile.user_id == user_uuid) | (FaceProfile.employee_id == employee_code)
+    ).delete(synchronize_session=False)
+
+    # 2. Clean up AccessRules
+    db.query(AccessRule).filter(
+        AccessRule.user_id == user_uuid
+    ).delete(synchronize_session=False)
+
+    # 3. Disconnect user_id on AccessLogs to maintain history without foreign key conflicts
+    db.query(AccessLog).filter(
+        (AccessLog.user_id == user_uuid) | (AccessLog.employee_id == employee_code)
+    ).update({"user_id": None}, synchronize_session=False)
+
+    # 4. Record Audit Log
     audit = AuditLog(
         action="USER_DELETE",
         user_id=current_user.id,
         user_name=current_user.full_name,
         entity_type="user",
-        entity_id=user.id,
-        details={"employee_id": user.employee_id, "name": user.full_name},
+        entity_id=user_uuid,
+        details={
+            "employee_id": employee_code,
+            "name": user_full_name,
+            "deleted_by": current_user.full_name,
+            "deleted_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
     db.add(audit)
+
+    # 5. Delete User
     db.delete(user)
     db.commit()
 
-    return {"success": True, "message": f"Đã xóa người dùng {user.full_name}"}
+    # 6. Broadcast Real-time WebSocket Event
+    try:
+        await ws_manager.broadcast({
+            "type": "USER_DELETED",
+            "data": {
+                "user_id": user_uuid,
+                "employee_id": employee_code,
+                "full_name": user_full_name,
+            }
+        })
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "message": f"Đã xóa vĩnh viễn người dùng '{user_full_name}' ({employee_code}) cùng dữ liệu khuôn mặt và phân quyền liên quan.",
+        "user_id": user_uuid,
+        "employee_id": employee_code,
+    }
 
 
 @router.get("/{user_id}/access-history")

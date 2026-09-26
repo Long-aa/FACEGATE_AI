@@ -313,6 +313,13 @@ export const api = {
       camera_id?: string;
       door_id?: string;
       employee_id?: string;
+      face_vector?: number[];
+      image_base64?: string;
+      liveness_score?: number;
+      liveness_passed?: boolean;
+      threshold?: number;
+      multi_frame_count?: number;
+      face_count?: number;
       simulated_confidence?: number;
       confidence_threshold?: number;
     }) =>
@@ -322,6 +329,29 @@ export const api = {
       }),
     getLogs: (limit = 10) =>
       request<any[]>(`/api/v1/recognition/logs?limit=${limit}`),
+  },
+
+  // ── 9b. Face Profiles ─────────────────────────────────────────
+  faces: {
+    list: (status?: string) =>
+      request<any[]>(`/api/v1/faces${status ? `?status=${status}` : ""}`),
+    get: (employeeId: string) =>
+      request<any>(`/api/v1/faces/${employeeId}`),
+    enroll: (data: {
+      employee_id: string;
+      encoding_vector: number[];
+      quality_score?: number;
+      samples_count?: number;
+      master_photo_url?: string;
+    }) =>
+      request<any>("/api/v1/faces/enroll", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    delete: (employeeId: string) =>
+      request<any>(`/api/v1/faces/${employeeId}`, {
+        method: "DELETE",
+      }),
   },
 
   // ── 10. Auth ──────────────────────────────────────────────────

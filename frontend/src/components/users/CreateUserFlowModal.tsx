@@ -3,6 +3,13 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/ToastNotification";
+import {
+  headPoseDetector,
+  HeadPoseStep,
+  HeadPoseAnalysisFrame,
+  POSE_STEP_META,
+  DEFAULT_HEAD_POSE_CONFIG,
+} from "@/lib/headPoseService";
 
 interface CreateUserFlowModalProps {
   onClose: () => void;
@@ -67,12 +74,19 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
   // Saving state
   const [saving, setSaving] = useState(false);
 
-  // Enrollment simulation state (for Screenshot 2)
-  const [enrollFrames, setEnrollFrames] = useState(24);
+  // Real Head Pose Enrollment State
+  const [enrollFrames, setEnrollFrames] = useState(0);
   const [autoCapture, setAutoCapture] = useState(true);
-  const [activePoseIdx, setActivePoseIdx] = useState(3); // 3 = Ngửa nhẹ (+10°)
-  const [poseScores, setPoseScores] = useState([100, 100, 100, 75, 0]);
-  const [guidancePrompt, setGuidancePrompt] = useState("GIỮ YÊN: ĐANG GHI NHẬN GÓC NGỬA (+10°)");
+  const [activePoseIdx, setActivePoseIdx] = useState<HeadPoseStep>(0); // 0 = Nhìn thẳng
+  const [poseScores, setPoseScores] = useState<number[]>([0, 0, 0, 0, 0]);
+  const [guidancePrompt, setGuidancePrompt] = useState("ĐƯA MẶT VỀ CHÍNH GIỮA CAMERA ĐỂ BẮT ĐẦU");
+  const [headPoseAnalysis, setHeadPoseAnalysis] = useState<HeadPoseAnalysisFrame | null>(null);
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
+  const [isMirrored, setIsMirrored] = useState(true);
+  const [isDetectorReady, setIsDetectorReady] = useState(false);
+  const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCamId, setSelectedCamId] = useState<string>("");
+  const animationFrameRef = useRef<number | null>(null);
   const [equalizerHeights, setEqualizerHeights] = useState<number[]>([
     40, 65, 80, 50, 90, 75, 45, 60, 85, 95, 70, 55, 80, 60, 45, 90, 75, 50, 65, 85, 95, 60, 75, 50, 70, 85, 45, 65
   ]);
@@ -109,7 +123,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
   };
 
   // Camera start / stop functions
-  const startCamera = async () => {
+  const startCamera = async (deviceId?: string) => {
     // Validate required fields before opening camera as requested:
     // "quét tên , mã, các trường cần thiết thì camera máy tính sẽ mở"
     if (!form.name.trim()) {
@@ -128,10 +142,13 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
     setIsStartingCamera(true);
     setCameraError(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+      const constraints: MediaStreamConstraints = {
+        video: deviceId
+          ? { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          : { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
         audio: false,
-      });
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       mediaStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -139,6 +156,17 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
       }
       setIsCameraActive(true);
       setIsStartingCamera(false);
+
+      // Enumerate available video inputs
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter((d) => d.kind === "videoinput");
+        setAvailableCameras(videoInputs);
+        if (videoInputs.length > 0 && !selectedCamId) {
+          setSelectedCamId(videoInputs[0].deviceId);
+        }
+      } catch {}
+
       return true;
     } catch (err: any) {
       console.error("Camera access failed:", err);
@@ -158,6 +186,33 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
       videoRef.current.srcObject = null;
     }
     setIsCameraActive(false);
+  };
+
+  const handleSwitchCamera = async () => {
+    if (availableCameras.length <= 1) {
+      toast.info("Đang sử dụng camera độ phân giải tối ưu nhất của thiết bị.", "CẤU HÌNH THIẾT BỊ");
+      return;
+    }
+    const curIdx = availableCameras.findIndex((c) => c.deviceId === selectedCamId);
+    const nextIdx = (curIdx + 1) % availableCameras.length;
+    const nextCam = availableCameras[nextIdx];
+    setSelectedCamId(nextCam.deviceId);
+    stopCamera();
+    setTimeout(() => {
+      startCamera(nextCam.deviceId);
+      toast.info(`Đã đổi sang Camera: ${nextCam.label || `Camera #${nextIdx + 1}`}`, "ĐỔI CAMERA THÀNH CÔNG");
+    }, 200);
+  };
+
+  const handleRetakeCurrentPose = () => {
+    headPoseDetector.setStep(activePoseIdx);
+    setPoseScores((prev) => {
+      const copy = [...prev];
+      copy[activePoseIdx] = 0;
+      return copy;
+    });
+    setEnrollFrames(activePoseIdx * 6);
+    toast.info(`Đang thu nạp lại tư thế: ${POSE_STEP_META[activePoseIdx].name}`, "CHỤP LẠI TƯ THẾ");
   };
 
   // Cleanup camera stream on unmount
@@ -188,31 +243,98 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
     return () => clearInterval(interval);
   }, [step]);
 
-  // Simulation of frames enrollment in step "enroll"
+  // ── REAL HEAD POSE GUIDANCE PROCESSING LOOP ─────────────────────────────────
   useEffect(() => {
-    if (step !== "enroll") return;
-    if (!autoCapture) return;
+    if (step !== "enroll" || !isCameraActive) return;
 
-    const interval = setInterval(() => {
-      setEnrollFrames((prev) => {
-        if (prev >= 30) {
-          clearInterval(interval);
-          setGuidancePrompt("✓ HOÀN THÀNH: ĐÃ THU ĐỦ 30/30 KHUNG HÌNH CHUẨN!");
-          setPoseScores([100, 100, 100, 100, 100]);
-          return 30;
-        }
-        const next = prev + 1;
-        if (next >= 28) {
-          setActivePoseIdx(4);
-          setPoseScores([100, 100, 100, 100, 80]);
-          setGuidancePrompt("GIỮ YÊN: ĐANG GHI NHẬN GÓC CÚI NHẸ (-10°)");
-        }
-        return next;
-      });
-    }, 800);
+    let isMounted = true;
+    headPoseDetector.isMirrored = isMirrored;
 
-    return () => clearInterval(interval);
-  }, [step, autoCapture]);
+    // Initialize detector model
+    headPoseDetector.initialize().then((ok) => {
+      if (isMounted) {
+        setIsDetectorReady(ok);
+        if (ok) {
+          console.log("MediaPipe FaceLandmarker successfully initialized!");
+        }
+      }
+    });
+
+    // Start Real-time Analysis Loop
+    const runFrame = () => {
+      if (!isMounted) return;
+
+      if (videoRef.current && videoRef.current.readyState >= 2) {
+        const frame = headPoseDetector.processVideoFrame(
+          videoRef.current,
+          activePoseIdx,
+          performance.now()
+        );
+        setHeadPoseAnalysis(frame);
+
+        if (enrollFrames < 30) {
+          setGuidancePrompt(frame.guidanceText);
+
+          if (
+            autoCapture &&
+            frame.faceDetected &&
+            !frame.multipleFaces &&
+            !frame.isTooFar &&
+            !frame.isTooClose &&
+            !frame.isOccluded &&
+            !frame.isLowLight
+          ) {
+            if (frame.poseStatus === "PASSED") {
+              // Current pose passed!
+              setPoseScores((prev) => {
+                const next = [...prev];
+                next[activePoseIdx] = 100;
+                return next;
+              });
+
+              if (activePoseIdx < 4) {
+                const nextIdx = (activePoseIdx + 1) as HeadPoseStep;
+                setActivePoseIdx(nextIdx);
+                setEnrollFrames(nextIdx * 6);
+                headPoseDetector.setStep(nextIdx);
+                toast.success(
+                  `✓ Đã đạt tư thế: ${POSE_STEP_META[activePoseIdx].name}! Chuyển sang: ${POSE_STEP_META[nextIdx].name}`,
+                  "TƯ THẾ ĐẠT"
+                );
+              } else {
+                // Completed all 5 poses!
+                setEnrollFrames(30);
+                setPoseScores([100, 100, 100, 100, 100]);
+                setGuidancePrompt("✓ HOÀN THÀNH: ĐÃ THU ĐỦ 30/30 KHUNG HÌNH CHUẨN!");
+                toast.success("✓ ĐÃ THU ĐỦ 30/30 KHUNG HÌNH CHUẨN CẢ 5 GÓC ĐỘ!", "HOÀN TẤT THU NẠP");
+              }
+            } else if (frame.poseStatus === "STABLE") {
+              // In progress of holding
+              setPoseScores((prev) => {
+                const next = [...prev];
+                next[activePoseIdx] = Math.max(next[activePoseIdx], frame.stableProgress);
+                return next;
+              });
+              const baseFrames = activePoseIdx * 6;
+              const fractionalFrames = Math.min(5, Math.floor((frame.stableProgress / 100) * 6));
+              setEnrollFrames(baseFrames + fractionalFrames);
+            }
+          }
+        }
+      }
+
+      animationFrameRef.current = requestAnimationFrame(runFrame);
+    };
+
+    animationFrameRef.current = requestAnimationFrame(runFrame);
+
+    return () => {
+      isMounted = false;
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+    };
+  }, [step, isCameraActive, activePoseIdx, autoCapture, isMirrored, enrollFrames]);
 
   // Take snapshot from webcam
   const handleSnapshotWebcam = () => {
@@ -309,7 +431,12 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
       return;
     }
 
-    // 3. Chuyển sang View Đăng ký khuôn mặt AI (Screenshot 2)
+    // 3. Reset detector and switch to View Đăng ký khuôn mặt AI
+    headPoseDetector.reset(0);
+    setActivePoseIdx(0);
+    setEnrollFrames(0);
+    setPoseScores([0, 0, 0, 0, 0]);
+    setGuidancePrompt("ĐƯA MẶT VỀ CHÍNH GIỮA CAMERA ĐỂ BẮT ĐẦU");
     setStep("enroll");
   };
 
@@ -317,6 +444,14 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
   // Action 3: Lưu Vector & Hoàn tất kích hoạt (tại View 2 - Screenshot 2)
   // ─────────────────────────────────────────────────────────────────────────────
   const handleFinalizeActivation = async () => {
+    if (enrollFrames < 30) {
+      toast.warning(
+        "Vui lòng hoàn thành đủ 5 tư thế góc quay (30/30 khung hình chuẩn) trước khi kích hoạt!",
+        "CHƯA ĐỦ ĐIỀU KIỆN"
+      );
+      return;
+    }
+
     setSaving(true);
     try {
       const selectedDoorNames = doors.filter((d) => d.selected).map((d) => d.name);
@@ -515,24 +650,30 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
 
               <button
                 type="button"
-                disabled={saving}
+                disabled={saving || enrollFrames < 30}
                 onClick={handleFinalizeActivation}
                 style={{
                   padding: "9px 24px",
-                  background: "linear-gradient(135deg, #00D4AA, #0072FF)",
+                  background: enrollFrames >= 30 ? "linear-gradient(135deg, #00D4AA, #0072FF)" : "rgba(255, 255, 255, 0.1)",
                   border: "none",
                   borderRadius: 8,
-                  color: "#FFFFFF",
+                  color: enrollFrames >= 30 ? "#FFFFFF" : "#94A3B8",
                   fontSize: 13,
                   fontWeight: 700,
-                  cursor: saving ? "not-allowed" : "pointer",
+                  cursor: saving || enrollFrames < 30 ? "not-allowed" : "pointer",
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
-                  boxShadow: "0 4px 18px rgba(0, 212, 170, 0.45)",
+                  boxShadow: enrollFrames >= 30 ? "0 4px 18px rgba(0, 212, 170, 0.45)" : "none",
+                  opacity: enrollFrames >= 30 ? 1 : 0.6,
+                  transition: "all 0.25s ease",
                 }}
               >
-                {saving ? "Đang lưu CSDL & kích hoạt..." : "Lưu vector & Hoàn tất kích hoạt"}
+                {saving
+                  ? "Đang lưu CSDL & kích hoạt..."
+                  : enrollFrames < 30
+                  ? `Hoàn thành 5 góc quay (${enrollFrames}/30)`
+                  : "Lưu vector & Hoàn tất kích hoạt"}
               </button>
             </>
           )}
@@ -1277,7 +1418,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
               <button
                 type="button"
                 disabled={isStartingCamera}
-                onClick={isCameraActive ? stopCamera : startCamera}
+                onClick={isCameraActive ? stopCamera : () => startCamera()}
                 style={{
                   width: "100%",
                   padding: "11px 16px",
@@ -1442,6 +1583,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
                   width: "100%",
                   height: "100%",
                   objectFit: "cover",
+                  transform: isMirrored ? "scaleX(-1)" : "none",
                 }}
               />
 
@@ -1459,86 +1601,320 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
                   fontWeight: 700,
                   color: "#E2E8F0",
                   textShadow: "0 1px 4px rgba(0,0,0,0.8)",
-                  zIndex: 10,
+                  zIndex: 20,
                 }}
               >
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#00D4AA", boxShadow: "0 0 8px #00D4AA" }} />
                   <span>CAM #01 • ENROLLMENT FHD 60FPS</span>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      padding: "2px 6px",
+                      borderRadius: 4,
+                      background: isDetectorReady ? "rgba(0, 212, 170, 0.15)" : "rgba(255, 193, 7, 0.15)",
+                      color: isDetectorReady ? "#00D4AA" : "#F59E0B",
+                      border: isDetectorReady ? "1px solid rgba(0, 212, 170, 0.3)" : "1px solid rgba(255, 193, 7, 0.3)",
+                    }}
+                  >
+                    {isDetectorReady ? "AI Model Active" : "Loading Model..."}
+                  </span>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 14, color: "#94A3B8" }}>
                   <span>⏱ 12ms</span>
-                  <span>• Lux: 450 (Đạt)</span>
-                  <span>• Khoảng cách: 0.8m</span>
+                  <span>• Lux: {headPoseAnalysis?.lux || 450} ({headPoseAnalysis?.isLowLight ? "Chưa đủ" : "Đạt"})</span>
+                  <span>• {headPoseAnalysis?.isTooFar ? "Tiến gần hơn" : headPoseAnalysis?.isTooClose ? "Lùi xa hơn" : "Khoảng cách: 0.8m"}</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowDebugPanel(!showDebugPanel)}
+                    style={{
+                      padding: "3px 8px",
+                      background: showDebugPanel ? "rgba(0, 212, 170, 0.2)" : "rgba(255, 255, 255, 0.08)",
+                      border: showDebugPanel ? "1px solid #00D4AA" : "1px solid rgba(255, 255, 255, 0.15)",
+                      borderRadius: 4,
+                      color: showDebugPanel ? "#00D4AA" : "#CBD5E1",
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                    }}
+                  >
+                    🛠️ Debug HUD: {showDebugPanel ? "BẬT" : "TẮT"}
+                  </button>
                 </div>
               </div>
 
-              {/* Center Face Target Box with Bounding Box & HUD prompt */}
+              {/* Dynamic Face Bounding Box tracking the user's face */}
+              {headPoseAnalysis?.faceDetected && headPoseAnalysis.bbox ? (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: `${(isMirrored ? (1 - headPoseAnalysis.bbox.x - headPoseAnalysis.bbox.width) : headPoseAnalysis.bbox.x) * 100}%`,
+                    top: `${headPoseAnalysis.bbox.y * 100}%`,
+                    width: `${headPoseAnalysis.bbox.width * 100}%`,
+                    height: `${headPoseAnalysis.bbox.height * 100}%`,
+                    border: headPoseAnalysis.isCorrectPose ? "2px solid #00D4AA" : "2px solid #38BDF8",
+                    borderRadius: 10,
+                    boxShadow: headPoseAnalysis.isCorrectPose
+                      ? "0 0 25px rgba(0, 212, 170, 0.45)"
+                      : "0 0 18px rgba(56, 189, 248, 0.35)",
+                    pointerEvents: "none",
+                    transition: "all 0.06s ease-out",
+                    zIndex: 12,
+                  }}
+                >
+                  {/* Floating Face Match Tag */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      top: -28,
+                      left: "50%",
+                      transform: "translateX(-50%)",
+                      background: "rgba(0, 0, 0, 0.85)",
+                      border: headPoseAnalysis.isCorrectPose ? "1px solid #00D4AA" : "1px solid #38BDF8",
+                      borderRadius: 6,
+                      padding: "2px 8px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      color: "#FFFFFF",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    <span>{form.name}</span>
+                    <span style={{ color: "#00D4AA", fontWeight: 800 }}>
+                      {Math.round(headPoseAnalysis.confidence * 100)}% MATCH
+                    </span>
+                  </div>
+
+                  {/* Corner Accents */}
+                  <div style={{ position: "absolute", top: -2, left: -2, width: 16, height: 16, borderTop: "3px solid #00D4AA", borderLeft: "3px solid #00D4AA" }} />
+                  <div style={{ position: "absolute", top: -2, right: -2, width: 16, height: 16, borderTop: "3px solid #00D4AA", borderRight: "3px solid #00D4AA" }} />
+                  <div style={{ position: "absolute", bottom: -2, left: -2, width: 16, height: 16, borderBottom: "3px solid #00D4AA", borderLeft: "3px solid #00D4AA" }} />
+                  <div style={{ position: "absolute", bottom: -2, right: -2, width: 16, height: 16, borderBottom: "3px solid #00D4AA", borderRight: "3px solid #00D4AA" }} />
+                </div>
+              ) : (
+                /* Fallback guide placeholder when searching for face */
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "46%",
+                    left: "50%",
+                    transform: "translate(-50%, -50%)",
+                    width: 240,
+                    height: 290,
+                    border: "2px dashed rgba(255, 255, 255, 0.25)",
+                    borderRadius: 14,
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    pointerEvents: "none",
+                    color: "rgba(255,255,255,0.4)",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    gap: 8,
+                    zIndex: 10,
+                  }}
+                >
+                  <div style={{ fontSize: 32 }}>👤</div>
+                  <div>Đưa khuôn mặt vào giữa khung hình</div>
+                </div>
+              )}
+
+              {/* On-Camera HUD: HEAD POSE GUIDANCE OVERLAY (Requirement VI) */}
               <div
                 style={{
                   position: "absolute",
-                  top: "46%",
-                  left: "50%",
-                  transform: "translate(-50%, -50%)",
-                  width: 260,
-                  height: 310,
-                  border: "2px solid rgba(0, 212, 170, 0.8)",
-                  borderRadius: 12,
-                  boxShadow: "0 0 25px rgba(0, 212, 170, 0.2)",
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "10px",
+                  top: 48,
+                  left: 18,
+                  background: "rgba(10, 15, 28, 0.88)",
+                  border: "1px solid rgba(0, 212, 170, 0.35)",
+                  borderRadius: 10,
+                  padding: "10px 14px",
+                  backdropFilter: "blur(12px)",
+                  zIndex: 20,
+                  minWidth: 220,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
                   pointerEvents: "none",
                 }}
               >
-                {/* Face label pill */}
-                <div
-                  style={{
-                    background: "rgba(0, 0, 0, 0.75)",
-                    border: "1px solid #00D4AA",
-                    borderRadius: 6,
-                    padding: "4px 10px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: "#FFFFFF",
-                  }}
-                >
-                  <span>{form.name}</span>
-                  <span style={{ color: "#00D4AA", fontWeight: 800 }}>98.6% MATCH</span>
+                <div style={{ fontSize: 9, fontWeight: 800, color: "#64748B", letterSpacing: "0.08em", marginBottom: 3 }}>
+                  HEAD POSE GUIDANCE
+                </div>
+                <div style={{ fontSize: 12.5, fontWeight: 800, color: "#FFFFFF", marginBottom: 5 }}>
+                  Tư thế hiện tại:{" "}
+                  <span style={{ color: "#00D4AA" }}>
+                    {POSE_STEP_META[activePoseIdx].name.toUpperCase()} (BƯỚC {activePoseIdx + 1}/5)
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 10, fontSize: 11, fontFamily: "monospace", color: "#CBD5E1", marginBottom: 6 }}>
+                  <span>Yaw: <strong style={{ color: Math.abs(headPoseAnalysis?.smoothedAngles.yaw || 0) > 15 ? "#00D4AA" : "#FFFFFF" }}>{(headPoseAnalysis?.smoothedAngles.yaw || 0).toFixed(1)}°</strong></span>
+                  <span>Pitch: <strong>{(headPoseAnalysis?.smoothedAngles.pitch || 0).toFixed(1)}°</strong></span>
+                  <span>Roll: <strong>{(headPoseAnalysis?.smoothedAngles.roll || 0).toFixed(1)}°</strong></span>
                 </div>
 
-                {/* Corner Accents */}
-                <div style={{ position: "absolute", top: -2, left: -2, width: 20, height: 20, borderTop: "3px solid #00D4AA", borderLeft: "3px solid #00D4AA" }} />
-                <div style={{ position: "absolute", top: -2, right: -2, width: 20, height: 20, borderTop: "3px solid #00D4AA", borderRight: "3px solid #00D4AA" }} />
-                <div style={{ position: "absolute", bottom: -2, left: -2, width: 20, height: 20, borderBottom: "3px solid #00D4AA", borderLeft: "3px solid #00D4AA" }} />
-                <div style={{ position: "absolute", bottom: -2, right: -2, width: 20, height: 20, borderBottom: "3px solid #00D4AA", borderRight: "3px solid #00D4AA" }} />
+                {enrollFrames >= 30 ? (
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#00D4AA" }}>
+                    ✓ ĐÃ HOÀN TẤT ĐỦ 5 TƯ THẾ (100%)
+                  </div>
+                ) : headPoseAnalysis?.poseStatus === "STABLE" ? (
+                  <div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#00D4AA", display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                      <span>✓ ĐANG Ở ĐÚNG TƯ THẾ</span>
+                      <span>Giữ nguyên {((headPoseAnalysis?.stableRemainingMs || 0) / 1000).toFixed(1)}s</span>
+                    </div>
+                    <div style={{ width: "100%", height: 5, background: "rgba(255,255,255,0.1)", borderRadius: 3, overflow: "hidden" }}>
+                      <div
+                        style={{
+                          width: `${headPoseAnalysis?.stableProgress || 0}%`,
+                          height: "100%",
+                          background: "linear-gradient(90deg, #00A3FF, #00D4AA)",
+                          borderRadius: 3,
+                          transition: "width 0.08s ease",
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 10.5, color: headPoseAnalysis?.faceDetected ? "#38BDF8" : "#94A3B8" }}>
+                    {headPoseAnalysis?.faceDetected ? "Căn chỉnh đầu theo góc yêu cầu..." : "Chờ nhận diện mặt..."}
+                  </div>
+                )}
               </div>
 
-              {/* Pulsing guidance prompt banner */}
+              {/* Floating Debug Panel (Requirement XII) */}
+              {showDebugPanel && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 48,
+                    right: 18,
+                    width: 240,
+                    background: "rgba(5, 8, 17, 0.94)",
+                    border: "1px solid rgba(0, 212, 170, 0.5)",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    fontSize: 10.5,
+                    fontFamily: "monospace",
+                    color: "#E2E8F0",
+                    zIndex: 30,
+                    boxShadow: "0 10px 30px rgba(0,0,0,0.8)",
+                    backdropFilter: "blur(12px)",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.1)", paddingBottom: 4, marginBottom: 6, fontWeight: 800, color: "#00D4AA" }}>
+                    <span>🛠️ DEBUG PANEL</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowDebugPanel(false)}
+                      style={{ background: "none", border: "none", color: "#94A3B8", cursor: "pointer", fontSize: 11 }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#94A3B8" }}>Face:</span>
+                      <span style={{ color: headPoseAnalysis?.faceDetected ? "#00D4AA" : "#EF4444", fontWeight: 700 }}>
+                        {headPoseAnalysis?.faceDetected ? (headPoseAnalysis.multipleFaces ? `Nhiều mặt (${headPoseAnalysis.faceCount})` : "Detected (1 mặt)") : "Không có mặt"}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#94A3B8" }}>Yaw:</span>
+                      <span style={{ color: "#38BDF8", fontWeight: 700 }}>{(headPoseAnalysis?.smoothedAngles.yaw || 0).toFixed(2)}°</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#94A3B8" }}>Pitch:</span>
+                      <span style={{ color: "#38BDF8", fontWeight: 700 }}>{(headPoseAnalysis?.smoothedAngles.pitch || 0).toFixed(2)}°</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#94A3B8" }}>Roll:</span>
+                      <span style={{ color: headPoseAnalysis && Math.abs(headPoseAnalysis.smoothedAngles.roll) > 15 ? "#EF4444" : "#38BDF8", fontWeight: 700 }}>
+                        {(headPoseAnalysis?.smoothedAngles.roll || 0).toFixed(2)}° {headPoseAnalysis && Math.abs(headPoseAnalysis.smoothedAngles.roll) > 15 ? "(!)" : ""}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#94A3B8" }}>Pose:</span>
+                      <span style={{ color: "#F59E0B", fontWeight: 700 }}>{headPoseAnalysis?.classifiedPose || "UNKNOWN"}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#94A3B8" }}>Confidence:</span>
+                      <span style={{ color: "#00D4AA" }}>{headPoseAnalysis ? `${Math.round(headPoseAnalysis.confidence * 100)}%` : "0%"}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#94A3B8" }}>Stable:</span>
+                      <span style={{ color: headPoseAnalysis?.poseStatus === "STABLE" || headPoseAnalysis?.poseStatus === "PASSED" ? "#00D4AA" : "#94A3B8", fontWeight: 700 }}>
+                        {headPoseAnalysis?.poseStatus === "STABLE" || headPoseAnalysis?.poseStatus === "PASSED" ? "YES" : "NO"}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#94A3B8" }}>Stable dur:</span>
+                      <span>{Math.round(700 - (headPoseAnalysis?.stableRemainingMs || 700))} ms / 700ms</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span style={{ color: "#94A3B8" }}>Camera Mode:</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = !isMirrored;
+                          setIsMirrored(next);
+                          headPoseDetector.isMirrored = next;
+                        }}
+                        style={{
+                          fontSize: 9,
+                          padding: "2px 6px",
+                          background: "rgba(255,255,255,0.1)",
+                          border: "1px solid rgba(255,255,255,0.2)",
+                          borderRadius: 4,
+                          color: "#FFFFFF",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {isMirrored ? "MIRRORED" : "NORMAL"}
+                      </button>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#94A3B8" }}>Current Step:</span>
+                      <span style={{ color: "#A855F7", fontWeight: 700 }}>{activePoseIdx + 1} / 5</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span style={{ color: "#94A3B8" }}>Frame:</span>
+                      <span style={{ color: "#00D4AA", fontWeight: 700 }}>{enrollFrames} / 30</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Pulsing guidance prompt banner (Requirement VII) */}
               <div
                 style={{
                   position: "absolute",
                   bottom: 54,
                   left: "50%",
                   transform: "translateX(-50%)",
-                  background: "rgba(0, 163, 255, 0.85)",
-                  backdropFilter: "blur(6px)",
-                  padding: "6px 18px",
+                  background: enrollFrames >= 30
+                    ? "rgba(0, 212, 170, 0.9)"
+                    : headPoseAnalysis?.poseStatus === "STABLE"
+                    ? "rgba(0, 163, 255, 0.9)"
+                    : "rgba(15, 23, 42, 0.92)",
+                  border: "1px solid " + (enrollFrames >= 30 ? "#00D4AA" : headPoseAnalysis?.poseStatus === "STABLE" ? "#00A3FF" : "rgba(255, 255, 255, 0.15)"),
+                  backdropFilter: "blur(8px)",
+                  padding: "6px 20px",
                   borderRadius: 20,
-                  fontSize: 11.5,
+                  fontSize: 12,
                   fontWeight: 800,
                   color: "#FFFFFF",
-                  letterSpacing: "0.04em",
-                  boxShadow: "0 0 16px rgba(0, 163, 255, 0.6)",
+                  letterSpacing: "0.03em",
+                  boxShadow: "0 0 16px rgba(0, 163, 255, 0.4)",
                   whiteSpace: "nowrap",
+                  zIndex: 20,
                 }}
               >
-                {guidancePrompt}
+                {enrollFrames >= 30
+                  ? "✓ HOÀN THÀNH: ĐÃ THU ĐỦ 30/30 KHUNG HÌNH CHUẨN!"
+                  : (headPoseAnalysis?.guidanceText || guidancePrompt)}
               </div>
 
               {/* Bottom camera toolbar */}
@@ -1555,12 +1931,13 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
                   display: "flex",
                   justifyContent: "space-between",
                   alignItems: "center",
+                  zIndex: 20,
                 }}
               >
                 <div style={{ display: "flex", gap: 10 }}>
                   <button
                     type="button"
-                    onClick={() => toast.info("Đang sử dụng camera có độ phân giải tối ưu nhất của thiết bị.", "CẤU HÌNH THIẾT BỊ")}
+                    onClick={handleSwitchCamera}
                     style={{
                       padding: "6px 12px",
                       background: "rgba(255, 255, 255, 0.06)",
@@ -1576,10 +1953,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setEnrollFrames(20);
-                      setGuidancePrompt("GIỮ YÊN: ĐANG GHI NHẬN LẠI...");
-                    }}
+                    onClick={handleRetakeCurrentPose}
                     style={{
                       padding: "6px 12px",
                       background: "rgba(255, 255, 255, 0.06)",
@@ -1641,7 +2015,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
                     ArcFace 3D Mesh
                   </span>
                 </div>
-                <span style={{ fontSize: 13, fontWeight: 800, color: "#38BDF8" }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: enrollFrames >= 30 ? "#00D4AA" : "#38BDF8" }}>
                   {enrollFrames} / 30 khung hình ({Math.round((enrollFrames / 30) * 100)}%)
                 </span>
               </div>
@@ -1652,7 +2026,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
                   style={{
                     width: `${Math.round((enrollFrames / 30) * 100)}%`,
                     height: "100%",
-                    background: "linear-gradient(90deg, #00A3FF, #00D4AA)",
+                    background: enrollFrames >= 30 ? "#00D4AA" : "linear-gradient(90deg, #00A3FF, #00D4AA)",
                     borderRadius: 4,
                     boxShadow: "0 0 10px rgba(0, 212, 170, 0.5)",
                     transition: "width 0.3s ease",
@@ -1660,100 +2034,64 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
                 />
               </div>
 
-              {/* 5 Head Pose Guidance Cards */}
+              {/* 5 Head Pose Guidance Cards (Requirement V) */}
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: "#64748B", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 10 }}>
                   Góc quay mẫu nhận diện thời gian thực (Head Pose Guidance):
                 </div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10 }}>
-                  {/* Pose 1: Nhìn thẳng */}
-                  <div
-                    style={{
-                      padding: "12px 8px",
-                      borderRadius: 8,
-                      background: "rgba(0, 212, 170, 0.08)",
-                      border: "1px solid rgba(0, 212, 170, 0.3)",
-                      textAlign: "center",
-                    }}
-                  >
-                    <div style={{ color: "#00D4AA", fontSize: 14, fontWeight: 900, marginBottom: 4 }}>✓</div>
-                    <div style={{ fontSize: 11.5, fontWeight: 700, color: "#FFFFFF" }}>Nhìn thẳng</div>
-                    <div style={{ fontSize: 10, color: "#64748B" }}>(0°)</div>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, color: "#00D4AA", marginTop: 4 }}>Đạt ({poseScores[0]}%)</div>
-                  </div>
+                  {POSE_STEP_META.map((meta, idx) => {
+                    const isPassed = poseScores[idx] >= 100 || enrollFrames >= (idx + 1) * 6;
+                    const isActive = activePoseIdx === idx && enrollFrames < 30;
+                    const score = isPassed ? 100 : isActive ? poseScores[idx] : 0;
 
-                  {/* Pose 2: Nghiêng trái */}
-                  <div
-                    style={{
-                      padding: "12px 8px",
-                      borderRadius: 8,
-                      background: "rgba(0, 212, 170, 0.08)",
-                      border: "1px solid rgba(0, 212, 170, 0.3)",
-                      textAlign: "center",
-                    }}
-                  >
-                    <div style={{ color: "#00D4AA", fontSize: 14, fontWeight: 900, marginBottom: 4 }}>✓</div>
-                    <div style={{ fontSize: 11.5, fontWeight: 700, color: "#FFFFFF" }}>Nghiêng trái</div>
-                    <div style={{ fontSize: 10, color: "#64748B" }}>(15°)</div>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, color: "#00D4AA", marginTop: 4 }}>Đạt ({poseScores[1]}%)</div>
-                  </div>
-
-                  {/* Pose 3: Nghiêng phải */}
-                  <div
-                    style={{
-                      padding: "12px 8px",
-                      borderRadius: 8,
-                      background: "rgba(0, 212, 170, 0.08)",
-                      border: "1px solid rgba(0, 212, 170, 0.3)",
-                      textAlign: "center",
-                    }}
-                  >
-                    <div style={{ color: "#00D4AA", fontSize: 14, fontWeight: 900, marginBottom: 4 }}>✓</div>
-                    <div style={{ fontSize: 11.5, fontWeight: 700, color: "#FFFFFF" }}>Nghiêng phải</div>
-                    <div style={{ fontSize: 10, color: "#64748B" }}>(15°)</div>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, color: "#00D4AA", marginTop: 4 }}>Đạt ({poseScores[2]}%)</div>
-                  </div>
-
-                  {/* Pose 4: Ngửa nhẹ */}
-                  <div
-                    style={{
-                      padding: "12px 8px",
-                      borderRadius: 8,
-                      background: poseScores[3] >= 100 ? "rgba(0, 212, 170, 0.08)" : "rgba(0, 163, 255, 0.12)",
-                      border: poseScores[3] >= 100 ? "1px solid rgba(0, 212, 170, 0.3)" : "1px solid #00A3FF",
-                      textAlign: "center",
-                    }}
-                  >
-                    <div style={{ color: poseScores[3] >= 100 ? "#00D4AA" : "#38BDF8", fontSize: 14, fontWeight: 900, marginBottom: 4 }}>
-                      {poseScores[3] >= 100 ? "✓" : "↺"}
-                    </div>
-                    <div style={{ fontSize: 11.5, fontWeight: 700, color: "#FFFFFF" }}>Ngửa nhẹ</div>
-                    <div style={{ fontSize: 10, color: "#64748B" }}>(+10°)</div>
-                    <div style={{ fontSize: 10.5, fontWeight: 700, color: poseScores[3] >= 100 ? "#00D4AA" : "#38BDF8", marginTop: 4 }}>
-                      {poseScores[3] >= 100 ? "Đạt (100%)" : `Đang nạp (${poseScores[3]}%)`}
-                    </div>
-                  </div>
-
-                  {/* Pose 5: Cúi nhẹ */}
-                  <div
-                    style={{
-                      padding: "12px 8px",
-                      borderRadius: 8,
-                      background: poseScores[4] >= 100 ? "rgba(0, 212, 170, 0.08)" : "rgba(0, 0, 0, 0.25)",
-                      border: poseScores[4] >= 100 ? "1px solid rgba(0, 212, 170, 0.3)" : "1px solid rgba(255, 255, 255, 0.08)",
-                      textAlign: "center",
-                    }}
-                  >
-                    <div style={{ color: poseScores[4] >= 100 ? "#00D4AA" : "#64748B", fontSize: 14, fontWeight: 900, marginBottom: 4 }}>
-                      {poseScores[4] >= 100 ? "✓" : "○"}
-                    </div>
-                    <div style={{ fontSize: 11.5, fontWeight: 700, color: "#FFFFFF" }}>Cúi nhẹ</div>
-                    <div style={{ fontSize: 10, color: "#64748B" }}>(-10°)</div>
-                    <div style={{ fontSize: 10.5, fontWeight: 600, color: poseScores[4] >= 100 ? "#00D4AA" : "#64748B", marginTop: 4 }}>
-                      {poseScores[4] >= 100 ? "Đạt (100%)" : "Chờ quét"}
-                    </div>
-                  </div>
+                    return (
+                      <div
+                        key={meta.id}
+                        style={{
+                          padding: "12px 8px",
+                          borderRadius: 8,
+                          background: isPassed
+                            ? "rgba(0, 212, 170, 0.08)"
+                            : isActive
+                            ? "rgba(0, 163, 255, 0.12)"
+                            : "rgba(0, 0, 0, 0.25)",
+                          border: isPassed
+                            ? "1px solid rgba(0, 212, 170, 0.35)"
+                            : isActive
+                            ? "1px solid #00A3FF"
+                            : "1px solid rgba(255, 255, 255, 0.08)",
+                          textAlign: "center",
+                          boxShadow: isActive ? "0 0 16px rgba(0, 163, 255, 0.25)" : "none",
+                          transition: "all 0.2s ease",
+                        }}
+                      >
+                        <div
+                          style={{
+                            color: isPassed ? "#00D4AA" : isActive ? "#38BDF8" : "#64748B",
+                            fontSize: 14,
+                            fontWeight: 900,
+                            marginBottom: 4,
+                          }}
+                        >
+                          {isPassed ? "✓" : isActive ? "↺" : "○"}
+                        </div>
+                        <div style={{ fontSize: 11.5, fontWeight: 700, color: "#FFFFFF" }}>{meta.name}</div>
+                        <div style={{ fontSize: 10, color: "#64748B" }}>{meta.angleHint}</div>
+                        <div
+                          style={{
+                            fontSize: 10.5,
+                            fontWeight: 700,
+                            color: isPassed ? "#00D4AA" : isActive ? "#38BDF8" : "#64748B",
+                            marginTop: 4,
+                          }}
+                        >
+                          {isPassed ? "Đạt (100%)" : isActive ? `Đang nạp (${score}%)` : "Chờ quét"}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -1801,7 +2139,9 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
 
                 <div style={{ textAlign: "right" }}>
                   <div style={{ fontSize: 10, color: "#64748B" }}>Tổng điểm:</div>
-                  <div style={{ fontSize: 18, fontWeight: 900, color: "#00D4AA" }}>96/100</div>
+                  <div style={{ fontSize: 18, fontWeight: 900, color: "#00D4AA" }}>
+                    {headPoseAnalysis?.faceDetected ? (headPoseAnalysis.isOccluded ? "55/100" : "96/100") : "0/100"}
+                  </div>
                 </div>
               </div>
 
@@ -1809,19 +2149,27 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
                 <div style={{ padding: "8px 10px", background: "rgba(0, 0, 0, 0.25)", borderRadius: 6 }}>
                   <div style={{ fontSize: 10.5, color: "#94A3B8" }}>Độ sắc nét ảnh</div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: "#38BDF8", marginTop: 2 }}>98%</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: "#38BDF8", marginTop: 2 }}>
+                    {headPoseAnalysis?.faceDetected ? "98%" : "0%"}
+                  </div>
                 </div>
                 <div style={{ padding: "8px 10px", background: "rgba(0, 0, 0, 0.25)", borderRadius: 6 }}>
                   <div style={{ fontSize: 10.5, color: "#94A3B8" }}>Độ mở mắt (Iris)</div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: "#00D4AA", marginTop: 2 }}>100%</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: "#00D4AA", marginTop: 2 }}>
+                    {headPoseAnalysis?.faceDetected ? "100%" : "0%"}
+                  </div>
                 </div>
                 <div style={{ padding: "8px 10px", background: "rgba(0, 0, 0, 0.25)", borderRadius: 6 }}>
                   <div style={{ fontSize: 10.5, color: "#94A3B8" }}>Không che khuất</div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: "#00D4AA", marginTop: 2 }}>100%</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: headPoseAnalysis?.isOccluded ? "#EF4444" : "#00D4AA", marginTop: 2 }}>
+                    {headPoseAnalysis?.faceDetected ? (headPoseAnalysis.isOccluded ? "45%" : "100%") : "0%"}
+                  </div>
                 </div>
                 <div style={{ padding: "8px 10px", background: "rgba(0, 0, 0, 0.25)", borderRadius: 6 }}>
                   <div style={{ fontSize: 10.5, color: "#94A3B8" }}>Chống giả mạo 3D</div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: "#00D4AA", marginTop: 2 }}>99.4%</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: "#00D4AA", marginTop: 2 }}>
+                    {headPoseAnalysis?.faceDetected ? "99.4%" : "0%"}
+                  </div>
                 </div>
               </div>
 
@@ -1829,19 +2177,23 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
               <div
                 style={{
                   padding: "8px 12px",
-                  background: "rgba(0, 212, 170, 0.08)",
-                  border: "1px solid rgba(0, 212, 170, 0.25)",
+                  background: headPoseAnalysis?.faceDetected && !headPoseAnalysis.isOccluded ? "rgba(0, 212, 170, 0.08)" : "rgba(255, 255, 255, 0.04)",
+                  border: headPoseAnalysis?.faceDetected && !headPoseAnalysis.isOccluded ? "1px solid rgba(0, 212, 170, 0.25)" : "1px solid rgba(255, 255, 255, 0.1)",
                   borderRadius: 6,
                   display: "flex",
                   alignItems: "center",
                   gap: 8,
                   fontSize: 11,
-                  color: "#00D4AA",
+                  color: headPoseAnalysis?.faceDetected && !headPoseAnalysis.isOccluded ? "#00D4AA" : "#94A3B8",
                   fontWeight: 600,
                 }}
               >
-                <span>✓</span>
-                <span>Liveness Detection: <strong>PASSED</strong> (Nhận diện thực thể sống 3D chuẩn xác)</span>
+                <span>{headPoseAnalysis?.faceDetected && !headPoseAnalysis.isOccluded ? "✓" : "○"}</span>
+                <span>
+                  Liveness Detection:{" "}
+                  <strong>{headPoseAnalysis?.faceDetected && !headPoseAnalysis.isOccluded ? "PASSED" : "ĐANG QUÉT"}</strong>{" "}
+                  (Nhận diện thực thể sống 3D chuẩn xác)
+                </span>
               </div>
             </div>
 

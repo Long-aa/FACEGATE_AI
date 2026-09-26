@@ -6,6 +6,7 @@ import { TopBar } from "@/components/layout/TopBar";
 import { api } from "@/lib/api";
 import { CreateUserFlowModal } from "@/components/users/CreateUserFlowModal";
 import { toast as notify } from "@/components/ui/ToastNotification";
+import { useRealtimeEvents, RealtimeEventPayload } from "@/lib/useRealtimeEvents";
 
 interface User {
   id: string;
@@ -611,6 +612,262 @@ function LockModal({ user, onClose, onConfirm }: { user: User; onClose: () => vo
   );
 }
 
+// ─── Modal: Xóa người dùng (Delete Confirmation) ───────────────────────────
+function DeleteUserModal({
+  user,
+  onClose,
+  onConfirm,
+}: {
+  user: User;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [confirmed, setConfirmed] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleConfirm = async () => {
+    setLoading(true);
+    try {
+      await onConfirm();
+      onClose();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Overlay onClose={onClose}>
+      <div
+        style={{
+          background: "var(--bg-card)",
+          border: "1px solid rgba(239, 68, 68, 0.35)",
+          borderRadius: 20,
+          width: 500,
+          boxShadow: "0 32px 80px rgba(239, 68, 68, 0.18), 0 10px 40px rgba(0, 0, 0, 0.8)",
+          overflow: "hidden",
+        }}
+      >
+        {/* Header */}
+        <div
+          style={{
+            padding: "20px 24px 16px",
+            borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            background: "rgba(239, 68, 68, 0.06)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: 12,
+                background: "rgba(239, 68, 68, 0.15)",
+                border: "1px solid rgba(239, 68, 68, 0.4)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#EF4444",
+                flexShrink: 0,
+              }}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                <line x1="10" y1="11" x2="10" y2="17" />
+                <line x1="14" y1="11" x2="14" y2="17" />
+              </svg>
+            </div>
+            <div>
+              <div style={{ fontSize: 16.5, fontWeight: 700, color: "#EF4444" }}>
+                Xóa người dùng khỏi CSDL
+              </div>
+              <div style={{ fontSize: 12.5, color: "var(--text-muted)", marginTop: 2 }}>
+                Thao tác quản trị nhân sự cấp cao (Fail-Safe)
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "rgba(255, 255, 255, 0.06)",
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              width: 32,
+              height: 32,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              fontSize: 18,
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Content */}
+        <div style={{ padding: "20px 24px" }}>
+          {/* Target Profile Card */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 14,
+              padding: "12px 16px",
+              background: "rgba(255, 255, 255, 0.03)",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              borderRadius: 12,
+              marginBottom: 16,
+            }}
+          >
+            <div
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 10,
+                background: avatarColor(user.id),
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 15,
+                fontWeight: 700,
+                color: "white",
+                flexShrink: 0,
+              }}
+            >
+              {initials(user.name)}
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
+                {user.name}
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 2, display: "flex", gap: 10 }}>
+                <span style={{ fontFamily: "monospace", color: "#38BDF8" }}>{user.employeeId}</span>
+                <span>•</span>
+                <span>{user.department}</span>
+              </div>
+            </div>
+            <StatusBadge status={user.status} />
+          </div>
+
+          {/* Critical Warning Details */}
+          <div
+            style={{
+              padding: "14px 16px",
+              background: "rgba(239, 68, 68, 0.08)",
+              border: "1px solid rgba(239, 68, 68, 0.25)",
+              borderRadius: 12,
+              marginBottom: 18,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#EF4444", marginBottom: 8, display: "flex", alignItems: "center", gap: 6 }}>
+              <span>⚠ CẢNH BÁO: HÀNH ĐỘNG KHÔNG THỂ HOÀN TÁC!</span>
+            </div>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5, color: "#F87171", lineHeight: 1.7 }}>
+              <li>
+                Toàn bộ hồ sơ nhân sự của <strong>{user.name}</strong> sẽ bị xóa vĩnh viễn khỏi CSDL PostgreSQL.
+              </li>
+              <li>
+                Dữ liệu sinh trắc học Face ID (512-D / 128-D embedding vector) sẽ bị hủy toàn bộ, camera sẽ ngay lập tức xem người này là <strong>UNKNOWN</strong>.
+              </li>
+              <li>
+                Mọi quyền truy cập cửa ra/vào (Access Rules) gán riêng cho người này sẽ lập tức bị thu hồi.
+              </li>
+              <li style={{ color: "#94A3B8" }}>
+                Lịch sử ra/vào trước đây trong Access Logs vẫn được bảo toàn để phục vụ kiểm toán an ninh.
+              </li>
+            </ul>
+          </div>
+
+          {/* Confirmation Checkbox */}
+          <label
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+              cursor: "pointer",
+              marginBottom: 20,
+              userSelect: "none",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(e) => setConfirmed(e.target.checked)}
+              style={{ width: 18, height: 18, marginTop: 2, accentColor: "#EF4444", cursor: "pointer" }}
+            />
+            <span style={{ fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+              Tôi xác nhận đã kiểm tra kỹ lưỡng và muốn <strong style={{ color: "#EF4444" }}>xóa vĩnh viễn</strong> tài khoản người dùng này khỏi hệ thống FaceGate AI.
+            </span>
+          </label>
+
+          {/* Action Buttons */}
+          <div style={{ display: "flex", gap: 12 }}>
+            <button
+              type="button"
+              onClick={onClose}
+              style={{
+                flex: 1,
+                padding: "11px",
+                background: "rgba(255, 255, 255, 0.05)",
+                border: "1px solid var(--border)",
+                borderRadius: 10,
+                color: "var(--text-secondary)",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Hủy bỏ
+            </button>
+            <button
+              type="button"
+              disabled={!confirmed || loading}
+              onClick={handleConfirm}
+              style={{
+                flex: 1.6,
+                padding: "11px",
+                border: "none",
+                borderRadius: 10,
+                color: "white",
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: confirmed && !loading ? "pointer" : "not-allowed",
+                opacity: confirmed ? 1 : 0.4,
+                background: "linear-gradient(135deg, #EF4444 0%, #B91C1C 100%)",
+                boxShadow: confirmed ? "0 4px 20px rgba(239, 68, 68, 0.4)" : "none",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                transition: "all 0.2s",
+              }}
+            >
+              {loading ? (
+                "Đang xóa khỏi CSDL..."
+              ) : (
+                <>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <polyline points="3 6 5 6 21 6" />
+                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                  </svg>
+                  Xác nhận xóa vĩnh viễn
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
 // ─── Toast notification ──────────────────────────────────────────────────────
 function Toast({ msg, type }: { msg: string; type: "success" | "info" }) {
   return (
@@ -654,9 +911,21 @@ export default function UsersPage() {
   const [hovered, setHovered] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; type: "success" | "info" } | null>(null);
 
-  type ModalType = { type: "view" | "edit" | "face" | "lock"; user: User } | null;
+  type ModalType = { type: "view" | "edit" | "face" | "lock" | "delete"; user: User } | null;
   const [modal, setModal] = useState<ModalType>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+
+  // Real-time synchronization for multi-session user updates
+  useRealtimeEvents(
+    useCallback((event: RealtimeEventPayload) => {
+      if (event.type === "USER_DELETED") {
+        const deletedId = event.data?.user_id;
+        const deletedEmp = event.data?.employee_id;
+        setUsers((prev) => prev.filter((u) => u.id !== deletedId && u.employeeId !== deletedEmp));
+        setTotalCount((prev) => Math.max(0, prev - 1));
+      }
+    }, [])
+  );
 
   const showToast = (msg: string, type: "success" | "info" = "success") => {
     if (type === "success") {
@@ -706,7 +975,20 @@ export default function UsersPage() {
     loadUsers();
   }, [loadUsers]);
 
-  const openModal = (type: "view" | "edit" | "face" | "lock", user: User) => setModal({ type, user });
+  const openModal = (type: "view" | "edit" | "face" | "lock" | "delete", user: User) => setModal({ type, user });
+
+  const handleDeleteUser = async () => {
+    if (!modal?.user) return;
+    try {
+      await api.users.delete(modal.user.id);
+      showToast(`Đã xóa vĩnh viễn người dùng ${modal.user.name} (${modal.user.employeeId}) khỏi CSDL!`, "success");
+      setModal(null);
+      await loadUsers();
+    } catch (err: any) {
+      console.error("Failed to delete user:", err);
+      showToast(err?.message || "Lỗi khi xóa người dùng khỏi CSDL", "info");
+    }
+  };
 
   const handleUpdateUser = async (patch: Partial<User>) => {
     if (!modal?.user) return;
@@ -926,6 +1208,24 @@ export default function UsersPage() {
                                 : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></svg>
                               }
                             </IconBtn>
+                            <IconBtn
+                              title={user.employeeId === "EMP-0001" ? "Không thể xóa Quản trị viên tối cao" : "Xóa người dùng"}
+                              color="#EF4444"
+                              onClick={() => {
+                                if (user.employeeId === "EMP-0001") {
+                                  showToast("Không thể xóa tài khoản Quản trị viên tối cao của hệ thống!", "info");
+                                  return;
+                                }
+                                openModal("delete", user);
+                              }}
+                            >
+                              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <polyline points="3 6 5 6 21 6" />
+                                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                <line x1="10" y1="11" x2="10" y2="17" />
+                                <line x1="14" y1="11" x2="14" y2="17" />
+                              </svg>
+                            </IconBtn>
                           </div>
                         </td>
                       </tr>
@@ -981,6 +1281,13 @@ export default function UsersPage() {
       )}
       {modal?.type === "lock" && (
         <LockModal user={modal.user} onClose={() => setModal(null)} onConfirm={handleToggleStatus} />
+      )}
+      {modal?.type === "delete" && (
+        <DeleteUserModal
+          user={modal.user}
+          onClose={() => setModal(null)}
+          onConfirm={handleDeleteUser}
+        />
       )}
       {isCreateOpen && (
         <CreateUserFlowModal

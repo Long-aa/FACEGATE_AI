@@ -2,6 +2,7 @@
 Door access control endpoints for FaceGate AI.
 Provides real door management, lock/unlock control with database state persistence and audit logging.
 """
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -18,6 +19,7 @@ from app.schemas.common import (
     DoorOut,
     DoorUpdate,
 )
+from app.websocket.manager import ws_manager
 
 router = APIRouter()
 
@@ -191,7 +193,7 @@ def delete_door(
 
 
 @router.post("/{door_id}/unlock", response_model=DoorActionResponse)
-def unlock_door(
+async def unlock_door(
     door_id: str,
     current_user: Optional[User] = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -224,6 +226,47 @@ def unlock_door(
     db.add(audit)
     db.commit()
 
+    try:
+        await ws_manager.broadcast({
+            "type": "DOOR_UPDATE",
+            "data": {
+                "door_id": door.id,
+                "door_name": door.name,
+                "lock_status": "Unlocked",
+                "duration": door.unlock_duration,
+                "action": "UNLOCK",
+            }
+        })
+        # Backend-driven physical auto-lock
+        duration = door.unlock_duration or 10
+        async def _auto_relock_door(d_id: str, delay: int):
+            await asyncio.sleep(delay)
+            from app.database.session import SessionLocal
+            db_l = SessionLocal()
+            try:
+                d_target = db_l.query(Door).filter(Door.id == d_id).first()
+                if d_target and d_target.lock_status == "Unlocked":
+                    d_target.lock_status = "Locked"
+                    db_l.commit()
+                    await ws_manager.broadcast({
+                        "type": "DOOR_UPDATE",
+                        "data": {
+                            "door_id": d_target.id,
+                            "door_name": d_target.name,
+                            "lock_status": "Locked",
+                            "duration": 0,
+                            "action": "AUTO_LOCK",
+                        }
+                    })
+            except Exception:
+                pass
+            finally:
+                db_l.close()
+
+        asyncio.create_task(_auto_relock_door(door.id, duration))
+    except Exception:
+        pass
+
     return DoorActionResponse(
         success=True,
         door_id=door.id,
@@ -233,7 +276,7 @@ def unlock_door(
 
 
 @router.post("/{door_id}/lock", response_model=DoorActionResponse)
-def lock_door(
+async def lock_door(
     door_id: str,
     current_user: Optional[User] = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -263,6 +306,20 @@ def lock_door(
     )
     db.add(audit)
     db.commit()
+
+    try:
+        await ws_manager.broadcast({
+            "type": "DOOR_UPDATE",
+            "data": {
+                "door_id": door.id,
+                "door_name": door.name,
+                "lock_status": "Locked",
+                "duration": 0,
+                "action": "LOCK",
+            }
+        })
+    except Exception:
+        pass
 
     return DoorActionResponse(
         success=True,

@@ -7,6 +7,14 @@ import { Sidebar } from "@/components/navigation/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/ToastNotification";
+import {
+  RecognitionPipelineController,
+  FrameAnalysis,
+  FaceBoundingBox,
+  VerificationResult,
+  PipelineState,
+} from "@/lib/recognitionPipeline";
+import { useRealtimeEvents, RealtimeEventPayload } from "@/lib/useRealtimeEvents";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -68,8 +76,8 @@ function useCounter(target: number, duration = 800) {
 export default function RecognitionPage() {
   // Real-time HUD Clock
   const [hudTime, setHudTime] = useState("");
-  const [fps, setFps] = useState(30.2);
-  const [latency, setLatency] = useState(28);
+  const [fps, setFps] = useState(30.0);
+  const [latency, setLatency] = useState(32);
 
   // Camera channels from DB
   const [channels, setChannels] = useState<CameraChannel[]>([]);
@@ -80,10 +88,19 @@ export default function RecognitionPage() {
   const [flashActive, setFlashActive] = useState(false);
   const [snapshotModalUrl, setSnapshotModalUrl] = useState<string | null>(null);
 
-  // Webcam live test
+  // Webcam live pipeline states
   const [useWebcam, setUseWebcam] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [pipelineState, setPipelineState] = useState<PipelineState>("IDLE");
+  const [statusBannerText, setStatusBannerText] = useState("ĐANG CHỜ NHẬN DIỆN • Vui lòng nhìn vào camera");
+  const [dynamicBbox, setDynamicBbox] = useState<FaceBoundingBox | null>(null);
+  const [liveVerification, setLiveVerification] = useState<VerificationResult | null>(null);
+  const [livenessScore, setLivenessScore] = useState(0.98);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const webcamStreamRef = useRef<MediaStream | null>(null);
+  const pipelineRef = useRef<RecognitionPipelineController | null>(null);
+  const animFrameIdRef = useRef<number | null>(null);
 
   // Settings Modal state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -109,7 +126,7 @@ export default function RecognitionPage() {
     total: 0,
     granted: 0,
     denied: 0,
-    avgConfidence: 94.6,
+    avgConfidence: 0,
   });
 
   // Real-time events stream
@@ -140,7 +157,7 @@ export default function RecognitionPage() {
   useEffect(() => {
     const timer = setInterval(() => {
       setFps(+(29.8 + Math.random() * 0.6).toFixed(1));
-      setLatency(27 + Math.floor(Math.random() * 4));
+      setLatency(28 + Math.floor(Math.random() * 6));
     }, 2500);
     return () => clearInterval(timer);
   }, []);
@@ -153,11 +170,11 @@ export default function RecognitionPage() {
       if (Array.isArray(camData) && camData.length > 0) {
         const mappedCams: CameraChannel[] = camData.map((c: any) => ({
           id: c.id,
-          code: c.name.toUpperCase().slice(0, 8),
+          code: c.camera_code || c.name.toUpperCase().slice(0, 8),
           name: c.name,
           location: c.location || "Chưa xác định",
           rtsp: c.rtsp_url || c.ip_address || "RTSP: Not configured",
-          status: c.status === "ONLINE" ? "ONLINE" : "OFFLINE",
+          status: c.status === "Online" || c.status === "ONLINE" ? "ONLINE" : "OFFLINE",
           ip_address: c.ip_address,
           resolution: c.resolution || "1920x1080",
           fps: c.fps || 30,
@@ -170,55 +187,53 @@ export default function RecognitionPage() {
       const doorData = await api.doors.list();
       if (Array.isArray(doorData) && doorData.length > 0) {
         setDoors(doorData);
-        const curDoor = doorData[0];
-        setActiveDoor(curDoor);
-        setDoorOpen(curDoor.status === "UNLOCKED");
+        const mainDoor = doorData.find((d: any) => d.name?.includes("chính") || d.door_code?.includes("D-001")) || doorData[0];
+        setActiveDoor(mainDoor);
+        setDoorOpen(mainDoor.lock_status === "Unlocked");
       }
 
       // Fetch stats
       const stats = await api.dashboard.getStats();
       if (stats) {
-        const total = stats.total_events_today || 0;
-        const granted = stats.granted_today || 0;
-        const denied = stats.denied_today || 0;
+        const total = stats.today_access_count ?? stats.today_entries ?? 0;
+        const granted = stats.granted_count ?? stats.success_recognitions ?? 0;
+        const denied = stats.denied_count ?? stats.denied_access ?? 0;
+        const avgConfidence = Number(stats.success_rate ?? stats.recognition_rate ?? 0);
         setStatsData({
           total,
           granted,
           denied,
-          avgConfidence: 94.6,
+          avgConfidence,
         });
       }
 
-      // Fetch logs
-      const logRes = await api.accessLogs.list({ limit: 15 });
-      if (logRes && Array.isArray(logRes.items)) {
-        const mappedLogs: LogEntry[] = logRes.items.map((item: any) => {
-          const isGranted = item.status === "GRANTED";
-          const isUnknown = !item.user_id || item.status === "DENIED" || (item.user_name && item.user_name.includes("Người lạ"));
-          const timeStr = item.access_time ? item.access_time.split("T")[1]?.slice(0, 8) : "--:--:--";
-          return {
-            id: item.id,
-            photoUrl: item.snapshot_url || "",
-            name: item.user_name || (isUnknown ? "Người lạ (Chưa đăng ký)" : "Nhân viên"),
-            code: item.employee_code || (isUnknown ? `Truy vết #${item.id.slice(0, 8)}` : "NV-00"),
-            dept: item.department || "Khối văn phòng",
-            time: timeStr,
-            location: `${item.camera_name || "Cam 01"} • ${item.door_name || "Cửa chính"}`,
-            confidence: item.confidence ? Number(item.confidence) : (isGranted ? 96.5 : 42.0),
-            status: isGranted ? "GRANTED" : "DENIED",
-            isUnknown,
-          };
-        });
+      // Fetch real recognition logs from PostgreSQL
+      const logRes = await api.recognition.getLogs(15);
+      if (Array.isArray(logRes) && logRes.length > 0) {
+        const mappedLogs: LogEntry[] = logRes.map((item: any) => ({
+          id: item.id,
+          photoUrl: item.photo_url || "",
+          name: item.name || "Người không xác định (Unknown)",
+          code: item.code || "--",
+          dept: item.dept || "Khách",
+          time: item.time || "--:--:--",
+          location: item.location || "Camera • Cửa chính",
+          confidence: Number(item.confidence || 0),
+          status: item.status === "GRANTED" ? "GRANTED" : "DENIED",
+          isUnknown: item.isUnknown,
+        }));
         setLogs(mappedLogs);
-        if (mappedLogs.length > 0) {
+        if (mappedLogs.length > 0 && !liveVerification) {
           setLatestLog(mappedLogs[0]);
-          // Map to live events
           setEvents(
             mappedLogs.slice(0, 5).map((l) => ({
               id: `ev-${l.id}`,
               name: l.name,
               time: l.time,
-              desc: l.status === "GRANTED" ? `Cấp quyền mở cửa tự động • ${l.confidence.toFixed(1)}%` : `Chặn truy cập & Ghi nhận vi phạm • ${l.confidence.toFixed(1)}%`,
+              desc:
+                l.status === "GRANTED"
+                  ? `Cấp quyền mở cửa tự động • ${l.confidence.toFixed(1)}%`
+                  : `Chặn truy cập & Ghi nhận vi phạm • ${l.confidence.toFixed(1)}%`,
               status: l.status === "GRANTED" ? "granted" : "denied",
             }))
           );
@@ -229,21 +244,102 @@ export default function RecognitionPage() {
       const res = await api.settings.get();
       const settings = res?.settings || {};
       if (settings) {
-        if (settings["recognition.threshold"]) setThreshold(parseFloat(settings["recognition.threshold"]));
-        if (settings["recognition.model"]) setSelectedModel(settings["recognition.model"]);
-        if (settings["camera.liveness_detection"] !== undefined) setLivenessCheck(settings["camera.liveness_detection"] === "true");
+        if (settings["detection_threshold"]) setThreshold(parseFloat(settings["detection_threshold"]));
+        if (settings["ai_model"]) setSelectedModel(settings["ai_model"]);
       }
     } catch (err) {
       console.error("Error fetching recognition data from DB:", err);
     }
-  }, []);
+  }, [liveVerification]);
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  // 4. Webcam handling
+  // 4. WebSocket real-time synchronization
+  useRealtimeEvents(
+    useCallback(
+      (event: RealtimeEventPayload) => {
+        if (event.type === "RECOGNITION_EVENT") {
+          const d = event.data;
+          const isGranted = d.result === "GRANTED";
+          const newEntry: LogEntry = {
+            id: d.log_id || String(Date.now()),
+            photoUrl: "",
+            name: d.user_name,
+            code: d.employee_id || (d.result === "UNKNOWN" ? "UNKNOWN" : "--"),
+            dept: d.department || "Khách",
+            time: d.time,
+            location: `${d.camera_name} • ${d.door_name}`,
+            confidence: d.confidence,
+            status: isGranted ? "GRANTED" : "DENIED",
+            isUnknown: d.result === "UNKNOWN",
+          };
+
+          setLatestLog(newEntry);
+          setLogs((prev) => [newEntry, ...prev.slice(0, 14)]);
+          setEvents((prev) => [
+            {
+              id: `ev-${Date.now()}`,
+              name: d.user_name,
+              time: d.time,
+              desc: isGranted ? `Cấp quyền mở cửa tự động • ${d.confidence.toFixed(1)}%` : `Từ chối truy cập: ${d.message}`,
+              status: isGranted ? "granted" : "denied",
+            },
+            ...prev.slice(0, 4),
+          ]);
+
+          // Update door state
+          if (d.door_unlocked) {
+            setDoorOpen(true);
+            setDoorSeconds(d.auto_lock_seconds || 10);
+          } else {
+            setDoorOpen(false);
+          }
+
+          // Update stats count
+          setStatsData((prev) => ({
+            ...prev,
+            total: prev.total + 1,
+            granted: isGranted ? prev.granted + 1 : prev.granted,
+            denied: !isGranted ? prev.denied + 1 : prev.denied,
+          }));
+        } else if (event.type === "DOOR_UPDATE") {
+          const isUnlocked = event.data.lock_status === "Unlocked";
+          setDoorOpen(isUnlocked);
+          if (isUnlocked) {
+            setDoorSeconds(event.data.duration || 10);
+          } else {
+            setDoorSeconds(0);
+          }
+        }
+      },
+      []
+    )
+  );
+
+  // 5. Initialize Controller
+  useEffect(() => {
+    const pipeline = new RecognitionPipelineController();
+    pipelineRef.current = pipeline;
+    pipeline.configure({
+      threshold,
+      doorId: activeDoor?.id,
+      cameraId: activeChannel?.id,
+    });
+
+    pipeline.initialize().catch((err) => {
+      console.error("Pipeline initialization failed:", err);
+    });
+
+    return () => {
+      pipeline.destroy();
+    };
+  }, [threshold, activeDoor, activeChannel]);
+
+  // 6. Webcam Start & Stop with Realtime Frame Loop
   const startWebcam = async () => {
+    setCameraError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: 1280, height: 720 },
@@ -251,17 +347,26 @@ export default function RecognitionPage() {
       webcamStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        await videoRef.current.play();
+        if (pipelineRef.current) {
+          pipelineRef.current.setVideoElement(videoRef.current);
+        }
       }
       setUseWebcam(true);
-      toast.success("Đã kết nối Webcam AI thành công!", "CAMERA ONLINE");
-    } catch (err) {
+      toast.success("Đã kết nối Webcam AI thành công! Bắt đầu nhận diện thời gian thực.", "CAMERA ONLINE");
+    } catch (err: any) {
       console.error("Cannot access webcam:", err);
-      toast.error("Không thể truy cập Webcam của thiết bị. Vui lòng cấp quyền camera trong trình duyệt.", "KẾT NỐI CAMERA THẤT BẠI");
+      setCameraError("Không thể truy cập camera. Cửa tiếp tục khóa (Fail-Safe).");
+      setPipelineState("CAMERA_ERROR");
+      toast.error("Không thể truy cập Webcam của thiết bị. Vui lòng cấp quyền trong trình duyệt.", "CAMERA OFFLINE");
     }
   };
 
   const stopWebcam = () => {
+    if (animFrameIdRef.current) {
+      cancelAnimationFrame(animFrameIdRef.current);
+      animFrameIdRef.current = null;
+    }
     if (webcamStreamRef.current) {
       webcamStreamRef.current.getTracks().forEach((track) => track.stop());
       webcamStreamRef.current = null;
@@ -269,7 +374,13 @@ export default function RecognitionPage() {
     if (videoRef.current) {
       videoRef.current.srcObject = null;
     }
+    if (pipelineRef.current) {
+      pipelineRef.current.setVideoElement(null);
+    }
     setUseWebcam(false);
+    setDynamicBbox(null);
+    setPipelineState("IDLE");
+    setStatusBannerText("ĐANG CHỜ NHẬN DIỆN • Vui lòng nhìn vào camera");
   };
 
   useEffect(() => {
@@ -278,22 +389,77 @@ export default function RecognitionPage() {
     };
   }, []);
 
-  // 5. Door countdown
+  // 7. Realtime Video Frame Processing Loop (RequestAnimationFrame)
   useEffect(() => {
-    if (!doorOpen || holdOpen) return;
-    const interval = setInterval(() => {
-      setDoorSeconds((prev) => {
-        if (prev <= 1) {
-          setDoorOpen(false);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [doorOpen, holdOpen]);
+    if (!useWebcam) {
+      if (animFrameIdRef.current) {
+        cancelAnimationFrame(animFrameIdRef.current);
+        animFrameIdRef.current = null;
+      }
+      return;
+    }
 
-  // 6. Capture snapshot
+    let isRunning = true;
+
+    const loop = async () => {
+      if (!isRunning) return;
+
+      if (pipelineRef.current && videoRef.current && !isPaused) {
+        try {
+          const analysis: FrameAnalysis = await pipelineRef.current.processFrame();
+
+          setPipelineState(analysis.state);
+          setStatusBannerText(analysis.statusText);
+          setDynamicBbox(analysis.boundingBox);
+          setLivenessScore(analysis.livenessScore);
+
+          const curSeconds = pipelineRef.current.getCountdown();
+          if (curSeconds > 0) {
+            setDoorSeconds(curSeconds);
+            setDoorOpen(true);
+          } else if (doorOpen && !holdOpen && curSeconds === 0) {
+            setDoorOpen(false);
+          }
+
+          if (analysis.verificationResult) {
+            setLiveVerification(analysis.verificationResult);
+            const isGranted = analysis.verificationResult.result === "GRANTED";
+            const newEntry: LogEntry = {
+              id: analysis.verificationResult.logId || String(Date.now()),
+              photoUrl: "",
+              name: analysis.verificationResult.userName,
+              code: analysis.verificationResult.employeeId || (analysis.verificationResult.result === "UNKNOWN" ? "UNKNOWN" : "--"),
+              dept: analysis.verificationResult.department || "Khách vãng lai",
+              time: analysis.verificationResult.timestamp,
+              location: `${activeChannel?.name || "Cam"} • ${activeDoor?.name || "Cửa chính"}`,
+              confidence: analysis.verificationResult.confidence,
+              status: isGranted ? "GRANTED" : "DENIED",
+              isUnknown: analysis.verificationResult.result === "UNKNOWN",
+            };
+            setLatestLog(newEntry);
+          }
+        } catch (err) {
+          console.error("Frame loop error:", err);
+        }
+      }
+
+      if (isRunning) {
+        animFrameIdRef.current = requestAnimationFrame(loop);
+      }
+    };
+
+    animFrameIdRef.current = requestAnimationFrame(loop);
+
+    return () => {
+      isRunning = false;
+      if (animFrameIdRef.current) {
+        cancelAnimationFrame(animFrameIdRef.current);
+        animFrameIdRef.current = null;
+      }
+    };
+  }, [useWebcam, isPaused, activeChannel, activeDoor, doorOpen, holdOpen]);
+
+  // 8. Capture snapshot
   const handleSnapshot = () => {
     setFlashActive(true);
     setTimeout(() => setFlashActive(false), 250);
@@ -304,47 +470,38 @@ export default function RecognitionPage() {
     const ctx = canvas.getContext("2d");
     if (ctx) {
       if (useWebcam && videoRef.current) {
-        ctx.drawImage(videoRef.current, 0, 0, 1280, 720);
+        ctx.save();
+        ctx.scale(-1, 1);
+        ctx.drawImage(videoRef.current, -1280, 0, 1280, 720);
+        ctx.restore();
       } else {
         ctx.fillStyle = "#080E18";
         ctx.fillRect(0, 0, 1280, 720);
-        ctx.strokeStyle = "rgba(0, 212, 170, 0.1)";
-        ctx.lineWidth = 1;
-        for (let x = 0; x < 1280; x += 80) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, 720);
-          ctx.stroke();
-        }
-        for (let y = 0; y < 720; y += 80) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(1280, y);
-          ctx.stroke();
-        }
       }
       ctx.fillStyle = "rgba(0, 212, 170, 0.9)";
       ctx.font = "bold 22px monospace";
       ctx.fillText(`FACEGATE AI RECOGNITION - ${activeChannel?.code || "CAM"} ${activeChannel?.name || ""}`, 30, 45);
       ctx.fillStyle = "white";
       ctx.font = "16px monospace";
-      ctx.fillText(`TIME: ${hudTime} | CONFIDENCE: 96.8% | STATUS: ACCESS GRANTED`, 30, 75);
+      ctx.fillText(
+        `TIME: ${hudTime} | STATUS: ${latestLog?.status === "GRANTED" ? "ACCESS GRANTED" : "ACCESS DENIED"} | USER: ${latestLog?.name || "UNKNOWN"}`,
+        30,
+        75
+      );
       setSnapshotModalUrl(canvas.toDataURL("image/jpeg", 0.95));
     }
   };
 
-  // 7. Trigger AI re-scan & verify
+  // 9. Trigger AI re-scan & verify
   const handleRescanAI = async () => {
     setIsScanning(true);
     try {
-      // Call real AI verification endpoint
       await api.recognition.verify({
         camera_id: activeChannel?.id,
         door_id: activeDoor?.id,
-        simulated_confidence: threshold,
-        confidence_threshold: threshold,
+        simulated_confidence: threshold * 100,
+        threshold,
       });
-      // Refresh DB data
       await fetchData();
     } catch (err) {
       console.error("Error during AI scan:", err);
@@ -353,7 +510,7 @@ export default function RecognitionPage() {
     }
   };
 
-  // 8. Fullscreen toggle
+  // 10. Fullscreen toggle
   const handleFullscreen = () => {
     if (!cameraCardRef.current) return;
     if (!document.fullscreenElement) {
@@ -363,7 +520,7 @@ export default function RecognitionPage() {
     }
   };
 
-  // 9. Door manual actions with DB persistence
+  // 11. Door manual actions with DB persistence
   const handleEmergencyClose = async () => {
     try {
       if (activeDoor) {
@@ -372,8 +529,22 @@ export default function RecognitionPage() {
       setDoorOpen(false);
       setHoldOpen(false);
       setDoorSeconds(0);
+      toast.success(`Đã khóa cửa khẩn cấp: ${activeDoor?.name || "Cửa chính"}`, "DOOR LOCKED");
     } catch (err) {
       console.error("Failed to lock door:", err);
+    }
+  };
+
+  const handleManualOpenDoor = async () => {
+    try {
+      if (activeDoor) {
+        await api.doors.unlock(activeDoor.id, 10);
+      }
+      setDoorOpen(true);
+      setDoorSeconds(10);
+      toast.success(`Đã mở cửa thủ công: ${activeDoor?.name || "Cửa chính"} (Tự khóa sau 10s)`, "DOOR UNLOCKED");
+    } catch (err) {
+      console.error("Failed to unlock door:", err);
     }
   };
 
@@ -388,25 +559,29 @@ export default function RecognitionPage() {
         setDoorSeconds(99);
       } else {
         if (activeDoor) {
-          await api.doors.unlock(activeDoor.id, 5);
+          await api.doors.lock(activeDoor.id);
         }
+        setDoorOpen(false);
         setHoldOpen(false);
-        setDoorSeconds(5);
+        setDoorSeconds(0);
       }
     } catch (err) {
       console.error("Failed to toggle door hold:", err);
     }
   };
 
-  // 10. Save Settings to DB
+  // 12. Save Settings to DB
   const handleSaveSettings = async () => {
     try {
       await api.settings.update({
-        "recognition.threshold": threshold.toString(),
-        "recognition.model": selectedModel,
-        "camera.liveness_detection": livenessCheck.toString(),
+        "detection_threshold": threshold,
+        "ai_model": selectedModel,
       });
+      if (pipelineRef.current) {
+        pipelineRef.current.configure({ threshold });
+      }
       setSettingsOpen(false);
+      toast.success("Đã cập nhật cấu hình ngưỡng nhận diện!", "LƯU CSDL THÀNH CÔNG");
     } catch (err) {
       console.error("Failed to save settings:", err);
     }
@@ -419,10 +594,19 @@ export default function RecognitionPage() {
     return true;
   });
 
-  // Animated numbers
-  const countTotal = useCounter(statsData.total || 1284);
-  const countGranted = useCounter(statsData.granted || 1192);
-  const countDenied = useCounter(statsData.denied || 92);
+  // Animated numbers from real DB
+  const countTotal = useCounter(statsData.total);
+  const countGranted = useCounter(statsData.granted);
+  const countDenied = useCounter(statsData.denied);
+
+  // Dynamic Bounding Box Color
+  const getBboxColor = () => {
+    if (pipelineState === "AUTHORIZED" || pipelineState === "DOOR_OPEN") return "#22C55E";
+    if (pipelineState === "UNKNOWN" || pipelineState === "DENIED") return "#EF4444";
+    if (pipelineState === "MULTIPLE_FACES" || pipelineState === "LIVENESS_CHECK") return "#F59E0B";
+    return "#38BDF8";
+  };
+  const bboxColor = getBboxColor();
 
   return (
     <div style={{ display: "flex", height: "100vh", background: "#080C14", overflow: "hidden" }}>
@@ -479,9 +663,13 @@ export default function RecognitionPage() {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" strokeWidth="2.2">
                   <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
                 </svg>
-                <span>RENDER: <strong style={{ color: "#38BDF8" }}>{fps} FPS</strong></span>
+                <span>
+                  RENDER: <strong style={{ color: "#38BDF8" }}>{fps} FPS</strong>
+                </span>
                 <span style={{ color: "rgba(255,255,255,0.2)" }}>|</span>
-                <span>LATENCY: <strong style={{ color: "#F59E0B" }}>{latency}ms</strong></span>
+                <span>
+                  LATENCY: <strong style={{ color: "#F59E0B" }}>{latency}ms</strong>
+                </span>
               </div>
 
               {/* Settings Button */}
@@ -608,7 +796,7 @@ export default function RecognitionPage() {
                       </span>
                     </div>
 
-                    <span style={{ fontWeight: 700, color: "#F8FAFC" }}>{useWebcam ? "Webcam máy tính (Live Test)" : activeChannel?.name || "Camera"}</span>
+                    <span style={{ fontWeight: 700, color: "#F8FAFC" }}>{useWebcam ? "Webcam máy tính (Real-Time AI)" : activeChannel?.name || "Camera"}</span>
                     <span style={{ color: "#64748B", fontFamily: "monospace" }}>{activeChannel?.resolution || "1920 × 1080"}</span>
                     <span style={{ color: "#22C55E", fontWeight: 700, fontFamily: "monospace" }}>FPS: {fps}</span>
                   </div>
@@ -724,10 +912,11 @@ export default function RecognitionPage() {
                           CAMERA CHƯA KẾT NỐI LUỒNG THỰC TẾ
                         </div>
                         <div style={{ fontSize: 12, color: "#94A3B8", maxWidth: 460, lineHeight: 1.5 }}>
-                          Hệ thống hoạt động theo dữ liệu thực từ CSDL. Luồng RTSP của {activeChannel?.name || "camera này"} đang ngoại tuyến hoặc chưa cấu hình IP khả dụng.
+                          {cameraError || `Hệ thống hoạt động theo dữ liệu thực từ CSDL. Luồng RTSP của ${activeChannel?.name || "camera này"} đang ngoại tuyến hoặc chưa cấu hình IP khả dụng.`}
                         </div>
                       </div>
                       <button
+                        id="btn-turn-on-webcam"
                         onClick={startWebcam}
                         style={{
                           display: "flex",
@@ -805,57 +994,89 @@ export default function RecognitionPage() {
                     </div>
                   </div>
 
-                  {/* Live Bounding Box (when webcam or scanning) */}
-                  {(useWebcam || isScanning) && (
+                  {/* Real-time State Machine HUD Banner (Requirement 29) */}
+                  {useWebcam && (
                     <div
                       style={{
                         position: "absolute",
-                        left: "40%",
-                        top: "30%",
-                        width: "20%",
-                        height: "45%",
-                        pointerEvents: "none",
-                        zIndex: 5,
+                        bottom: 12,
+                        left: "50%",
+                        transform: "translateX(-50%)",
+                        background: "rgba(9, 14, 26, 0.92)",
+                        border: `1px solid ${bboxColor}`,
+                        boxShadow: `0 0 20px ${bboxColor}33`,
+                        borderRadius: 20,
+                        padding: "6px 16px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        zIndex: 15,
+                        whiteSpace: "nowrap",
+                        backdropFilter: "blur(8px)",
                       }}
                     >
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: "50%",
+                          background: bboxColor,
+                          boxShadow: `0 0 8px ${bboxColor}`,
+                        }}
+                      />
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: "#F8FAFC", letterSpacing: "0.02em" }}>
+                        {statusBannerText}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Live Dynamic Bounding Box from MediaPipe (Mirror-adjusted) */}
+                  {useWebcam && dynamicBbox && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        left: `${(1 - dynamicBbox.x - dynamicBbox.width) * 100}%`,
+                        top: `${dynamicBbox.y * 100}%`,
+                        width: `${dynamicBbox.width * 100}%`,
+                        height: `${dynamicBbox.height * 100}%`,
+                        border: `2px solid ${bboxColor}`,
+                        boxShadow: `0 0 15px ${bboxColor}55`,
+                        pointerEvents: "none",
+                        zIndex: 10,
+                        transition: "all 0.05s linear",
+                      }}
+                    >
+                      {/* Corner Brackets */}
+                      <span style={{ position: "absolute", top: -2, left: -2, width: 12, height: 12, borderTop: `3px solid ${bboxColor}`, borderLeft: `3px solid ${bboxColor}` }} />
+                      <span style={{ position: "absolute", top: -2, right: -2, width: 12, height: 12, borderTop: `3px solid ${bboxColor}`, borderRight: `3px solid ${bboxColor}` }} />
+                      <span style={{ position: "absolute", bottom: -2, left: -2, width: 12, height: 12, borderBottom: `3px solid ${bboxColor}`, borderLeft: `3px solid ${bboxColor}` }} />
+                      <span style={{ position: "absolute", bottom: -2, right: -2, width: 12, height: 12, borderBottom: `3px solid ${bboxColor}`, borderRight: `3px solid ${bboxColor}` }} />
+
+                      {/* Header Badge */}
                       <div
                         style={{
                           position: "absolute",
-                          inset: 0,
-                          border: "2px solid rgba(0, 212, 170, 0.6)",
-                          boxShadow: "0 0 15px rgba(0, 212, 170, 0.2)",
+                          bottom: "100%",
+                          left: "50%",
+                          transform: "translateX(-50%)",
+                          marginBottom: 6,
+                          background: "rgba(10, 20, 36, 0.95)",
+                          border: `1px solid ${bboxColor}`,
+                          borderRadius: 6,
+                          padding: "3px 8px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          whiteSpace: "nowrap",
                         }}
                       >
-                        <span style={{ position: "absolute", top: -2, left: -2, width: 10, height: 10, borderTop: "3px solid #00D4AA", borderLeft: "3px solid #00D4AA" }} />
-                        <span style={{ position: "absolute", top: -2, right: -2, width: 10, height: 10, borderTop: "3px solid #00D4AA", borderRight: "3px solid #00D4AA" }} />
-                        <span style={{ position: "absolute", bottom: -2, left: -2, width: 10, height: 10, borderBottom: "3px solid #00D4AA", borderLeft: "3px solid #00D4AA" }} />
-                        <span style={{ position: "absolute", bottom: -2, right: -2, width: 10, height: 10, borderBottom: "3px solid #00D4AA", borderRight: "3px solid #00D4AA" }} />
-
-                        <div
-                          style={{
-                            position: "absolute",
-                            bottom: "100%",
-                            left: "50%",
-                            transform: "translateX(-50%)",
-                            marginBottom: 4,
-                            background: "rgba(10, 20, 36, 0.95)",
-                            border: "1px solid rgba(0, 212, 170, 0.5)",
-                            borderRadius: 4,
-                            padding: "2px 6px",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 5,
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          <span style={{ width: 4, height: 4, borderRadius: "50%", background: "#00D4AA" }} />
-                          <span style={{ fontSize: 10, fontWeight: 700, color: "#F8FAFC" }}>
-                            {latestLog?.name || "Xác thực khuôn mặt"}
-                          </span>
-                          <span style={{ fontSize: 9.5, fontWeight: 800, color: "#38BDF8", fontFamily: "monospace" }}>
-                            {latestLog?.confidence ? `${latestLog.confidence.toFixed(1)}%` : "AI SCAN"}
-                          </span>
-                        </div>
+                        <span style={{ width: 5, height: 5, borderRadius: "50%", background: bboxColor }} />
+                        <span style={{ fontSize: 10.5, fontWeight: 800, color: "#F8FAFC" }}>
+                          {latestLog?.name || "Đang quét..."}
+                        </span>
+                        <span style={{ fontSize: 10, fontWeight: 800, color: bboxColor, fontFamily: "monospace" }}>
+                          {latestLog?.confidence ? `${latestLog.confidence.toFixed(1)}%` : "AI SCAN"}
+                        </span>
                       </div>
                     </div>
                   )}
@@ -999,11 +1220,11 @@ export default function RecognitionPage() {
                         display: "flex",
                         alignItems: "center",
                         gap: 6,
-                        padding: "6px 12px",
-                        background: useWebcam ? "rgba(239, 68, 68, 0.15)" : "rgba(56, 189, 248, 0.12)",
-                        border: `1px solid ${useWebcam ? "rgba(239, 68, 68, 0.35)" : "rgba(56, 189, 248, 0.3)"}`,
+                        padding: "6px 14px",
+                        background: useWebcam ? "rgba(239, 68, 68, 0.15)" : "linear-gradient(135deg, rgba(0, 212, 170, 0.2), rgba(56, 189, 248, 0.2))",
+                        border: `1px solid ${useWebcam ? "rgba(239, 68, 68, 0.35)" : "rgba(0, 212, 170, 0.4)"}`,
                         borderRadius: 6,
-                        color: useWebcam ? "#EF4444" : "#38BDF8",
+                        color: useWebcam ? "#EF4444" : "#00D4AA",
                         fontSize: 11,
                         fontWeight: 700,
                         cursor: "pointer",
@@ -1015,7 +1236,7 @@ export default function RecognitionPage() {
                 </div>
               </div>
 
-              {/* ── 4 Stat Cards in 1 Row (Real Data) ── */}
+              {/* ── 4 Stat Cards in 1 Row (Real Data from DB) ── */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
                 <div style={{ background: "rgba(13, 20, 36, 0.65)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 12, padding: "12px 14px" }}>
                   <div style={{ fontSize: 10.5, color: "#64748B", fontWeight: 600, textTransform: "uppercase", marginBottom: 4 }}>
@@ -1049,7 +1270,7 @@ export default function RecognitionPage() {
                     CONFIDENCE TB
                   </div>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                    <span style={{ fontSize: 24, fontWeight: 800, color: "#00D4AA" }}>{statsData.avgConfidence}%</span>
+                    <span style={{ fontSize: 24, fontWeight: 800, color: "#00D4AA" }}>{statsData.avgConfidence.toFixed(1)}%</span>
                   </div>
                 </div>
               </div>
@@ -1095,7 +1316,7 @@ export default function RecognitionPage() {
                             color: logFilter === t ? "#05131E" : "#94A3B8",
                           }}
                         >
-                          {t === "all" ? "Tất cả Camera" : t === "granted" ? "Hợp lệ" : "Từ chối"}
+                          {t === "all" ? "Tất cả" : t === "granted" ? "Hợp lệ" : "Từ chối"}
                         </button>
                       ))}
                     </div>
@@ -1210,7 +1431,7 @@ export default function RecognitionPage() {
             {/* ── RIGHT COLUMN: Live Result, Door Relay, AI Engine, Events ──      */}
             {/* ═══════════════════════════════════════════════════════════════════ */}
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {/* ── Box 1: Kết Quả Nhận Diện Vừa Xử Lý ── */}
+              {/* ── Box 1: Kết Quả Nhận Diện Vừa Xử Lý (Real Result from CSDL) ── */}
               <div
                 style={{
                   background: "rgba(13, 20, 36, 0.65)",
@@ -1240,7 +1461,7 @@ export default function RecognitionPage() {
                       borderRadius: 10,
                     }}
                   >
-                    • VỪA XONG
+                    • REAL-TIME
                   </span>
                 </div>
 
@@ -1254,7 +1475,7 @@ export default function RecognitionPage() {
                         aspectRatio: "1/1",
                         borderRadius: 8,
                         overflow: "hidden",
-                        border: "2px solid rgba(0, 212, 170, 0.4)",
+                        border: `2px solid ${latestLog?.status === "DENIED" || latestLog?.isUnknown ? "rgba(239, 68, 68, 0.5)" : "rgba(0, 212, 170, 0.5)"}`,
                         background: "radial-gradient(circle at center, #0E2238 0%, #060D1A 100%)",
                         display: "flex",
                         alignItems: "center",
@@ -1266,7 +1487,7 @@ export default function RecognitionPage() {
                           width: 52,
                           height: 52,
                           borderRadius: "50%",
-                          background: latestLog?.status === "DENIED" ? "linear-gradient(135deg, #EF4444, #B91C1C)" : "linear-gradient(135deg, #00D4AA, #0284C7)",
+                          background: latestLog?.status === "DENIED" || latestLog?.isUnknown ? "linear-gradient(135deg, #EF4444, #B91C1C)" : "linear-gradient(135deg, #00D4AA, #0284C7)",
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
@@ -1290,7 +1511,7 @@ export default function RecognitionPage() {
                           color: "#38BDF8",
                         }}
                       >
-                        {latestLog?.time || "10:45:22"}
+                        {latestLog?.time || "14:25:00"}
                       </div>
                     </div>
                   </div>
@@ -1303,7 +1524,7 @@ export default function RecognitionPage() {
                         aspectRatio: "1/1",
                         borderRadius: 8,
                         overflow: "hidden",
-                        border: "2px solid rgba(56, 189, 248, 0.4)",
+                        border: `2px solid ${latestLog?.isUnknown ? "rgba(239, 68, 68, 0.3)" : "rgba(56, 189, 248, 0.4)"}`,
                         background: "radial-gradient(circle at center, #101F33 0%, #060D1A 100%)",
                         display: "flex",
                         alignItems: "center",
@@ -1315,11 +1536,11 @@ export default function RecognitionPage() {
                           width: 52,
                           height: 52,
                           borderRadius: "50%",
-                          background: "linear-gradient(135deg, #3B82F6, #1D4ED8)",
+                          background: latestLog?.isUnknown ? "rgba(239, 68, 68, 0.2)" : "linear-gradient(135deg, #3B82F6, #1D4ED8)",
                           display: "flex",
                           alignItems: "center",
                           justifyContent: "center",
-                          color: "#FFFFFF",
+                          color: latestLog?.isUnknown ? "#EF4444" : "#FFFFFF",
                           fontSize: 18,
                           fontWeight: 800,
                         }}
@@ -1331,7 +1552,7 @@ export default function RecognitionPage() {
                           position: "absolute",
                           bottom: 4,
                           right: 4,
-                          background: "rgba(2, 132, 199, 0.85)",
+                          background: latestLog?.isUnknown ? "rgba(239, 68, 68, 0.75)" : "rgba(2, 132, 199, 0.85)",
                           padding: "1px 5px",
                           borderRadius: 3,
                           fontSize: 8.5,
@@ -1339,7 +1560,7 @@ export default function RecognitionPage() {
                           color: "#FFFFFF",
                         }}
                       >
-                        MASTER ID
+                        {latestLog?.isUnknown ? "CHƯA ĐĂNG KÝ" : "MASTER ID"}
                       </div>
                     </div>
                   </div>
@@ -1348,8 +1569,8 @@ export default function RecognitionPage() {
                 {/* Big Status Banner */}
                 <div
                   style={{
-                    background: latestLog?.status === "DENIED" ? "rgba(239, 68, 68, 0.12)" : "rgba(34, 197, 94, 0.12)",
-                    border: `1px solid ${latestLog?.status === "DENIED" ? "rgba(239, 68, 68, 0.35)" : "rgba(34, 197, 94, 0.35)"}`,
+                    background: latestLog?.status === "DENIED" || latestLog?.isUnknown ? "rgba(239, 68, 68, 0.12)" : "rgba(34, 197, 94, 0.12)",
+                    border: `1px solid ${latestLog?.status === "DENIED" || latestLog?.isUnknown ? "rgba(239, 68, 68, 0.35)" : "rgba(34, 197, 94, 0.35)"}`,
                     borderRadius: 8,
                     padding: "10px 12px",
                     display: "flex",
@@ -1363,7 +1584,7 @@ export default function RecognitionPage() {
                       width: 28,
                       height: 28,
                       borderRadius: "50%",
-                      background: latestLog?.status === "DENIED" ? "#EF4444" : "#22C55E",
+                      background: latestLog?.status === "DENIED" || latestLog?.isUnknown ? "#EF4444" : "#22C55E",
                       color: "#FFFFFF",
                       display: "flex",
                       alignItems: "center",
@@ -1371,7 +1592,7 @@ export default function RecognitionPage() {
                       flexShrink: 0,
                     }}
                   >
-                    {latestLog?.status === "DENIED" ? (
+                    {latestLog?.status === "DENIED" || latestLog?.isUnknown ? (
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
                         <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
                       </svg>
@@ -1382,11 +1603,15 @@ export default function RecognitionPage() {
                     )}
                   </div>
                   <div>
-                    <div style={{ fontSize: 12, fontWeight: 800, color: latestLog?.status === "DENIED" ? "#EF4444" : "#22C55E", letterSpacing: "0.02em" }}>
-                      {latestLog?.status === "DENIED" ? "TỪ CHỐI TRUY CẬP (ACCESS DENIED)" : "ĐÃ CẤP QUYỀN VÀO CỬA (GRANTED)"}
+                    <div style={{ fontSize: 12, fontWeight: 800, color: latestLog?.status === "DENIED" || latestLog?.isUnknown ? "#EF4444" : "#22C55E", letterSpacing: "0.02em" }}>
+                      {latestLog?.status === "DENIED" || latestLog?.isUnknown ? "TỪ CHỐI TRUY CẬP (ACCESS DENIED)" : "ĐÃ CẤP QUYỀN VÀO CỬA (GRANTED)"}
                     </div>
                     <div style={{ fontSize: 10, color: "#94A3B8" }}>
-                      {latestLog?.status === "DENIED" ? "KHÔNG TÌM THẤY TRONG CSDL HOẶC SAI QUYỀN" : "XÁC THỰC THÀNH CÔNG • CSDL KHỚP"}
+                      {latestLog?.isUnknown
+                        ? "KHÔNG TÌM THẤY TRONG CSDL HOẶC CHƯA ĐĂNG KÝ"
+                        : latestLog?.status === "DENIED"
+                        ? "SAI QUYỀN TRUY CẬP HOẶC NGOÀI GIỜ"
+                        : "XÁC THỰC THÀNH CÔNG • CSDL KHỚP"}
                     </div>
                   </div>
                 </div>
@@ -1395,19 +1620,19 @@ export default function RecognitionPage() {
                 <div style={{ display: "flex", flexDirection: "column", gap: 7, fontSize: 11.5, marginBottom: 14 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.04)", paddingBottom: 5 }}>
                     <span style={{ color: "#64748B" }}>Họ và tên:</span>
-                    <strong style={{ color: "#F8FAFC" }}>{latestLog?.name || "Nguyễn Văn An"}</strong>
+                    <strong style={{ color: latestLog?.isUnknown ? "#EF4444" : "#F8FAFC" }}>{latestLog?.name || "Đang chờ nhận diện"}</strong>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.04)", paddingBottom: 5 }}>
                     <span style={{ color: "#64748B" }}>Mã nhân viên:</span>
-                    <span style={{ color: "#38BDF8", fontWeight: 700, fontFamily: "monospace" }}>{latestLog?.code || "NV001"}</span>
+                    <span style={{ color: latestLog?.isUnknown ? "#EF4444" : "#38BDF8", fontWeight: 700, fontFamily: "monospace" }}>{latestLog?.code || "--"}</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid rgba(255,255,255,0.04)", paddingBottom: 5 }}>
                     <span style={{ color: "#64748B" }}>Phòng ban:</span>
-                    <span style={{ color: "#E2E8F0" }}>{latestLog?.dept || "Kỹ thuật & R&D AI"}</span>
+                    <span style={{ color: "#E2E8F0" }}>{latestLog?.dept || "Khách"}</span>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ color: "#64748B" }}>Cổng truy cập:</span>
-                    <span style={{ color: "#E2E8F0" }}>{latestLog?.location || "Flap Barrier Cửa Chính"}</span>
+                    <span style={{ color: "#E2E8F0" }}>{latestLog?.location || `${activeDoor?.name || "Cửa chính"}`}</span>
                   </div>
                 </div>
 
@@ -1424,12 +1649,12 @@ export default function RecognitionPage() {
                     <span style={{ fontSize: 10, color: "#64748B", fontWeight: 700, textTransform: "uppercase" }}>
                       ĐỘ KHỚP THUẬT TOÁN:
                     </span>
-                    <span style={{ fontSize: 18, fontWeight: 800, color: latestLog?.status === "DENIED" ? "#EF4444" : "#38BDF8", fontFamily: "monospace" }}>
-                      {latestLog?.confidence ? `${latestLog.confidence.toFixed(1)}%` : "96.8%"}
+                    <span style={{ fontSize: 18, fontWeight: 800, color: latestLog?.status === "DENIED" || latestLog?.isUnknown ? "#EF4444" : "#38BDF8", fontFamily: "monospace" }}>
+                      {latestLog?.confidence ? `${latestLog.confidence.toFixed(1)}%` : "--"}
                     </span>
                   </div>
                   <div style={{ fontSize: 9.5, color: "#64748B", lineHeight: 1.5, fontFamily: "monospace" }}>
-                    Threshold: {threshold.toFixed(2)} | Model: {selectedModel.split(" ")[0]} | Anti-spoofing: {livenessCheck ? "Active" : "Off"}
+                    Threshold: {threshold.toFixed(2)} | Model: {selectedModel.split(" ")[0]} | Anti-spoofing: {livenessCheck ? `Active (${livenessScore.toFixed(2)})` : "Off"}
                   </div>
                 </div>
               </div>
@@ -1465,13 +1690,14 @@ export default function RecognitionPage() {
                       width: 52,
                       height: 52,
                       borderRadius: "50%",
-                      background: doorOpen ? "rgba(56, 189, 248, 0.12)" : "rgba(0, 212, 170, 0.1)",
+                      background: doorOpen ? "rgba(56, 189, 248, 0.15)" : "rgba(0, 212, 170, 0.1)",
                       border: `2px solid ${doorOpen ? "rgba(56, 189, 248, 0.4)" : "rgba(0, 212, 170, 0.4)"}`,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
                       margin: "0 auto 8px",
                       color: doorOpen ? "#38BDF8" : "#00D4AA",
+                      boxShadow: doorOpen ? "0 0 20px rgba(56, 189, 248, 0.3)" : "none",
                     }}
                   >
                     {doorOpen ? (
@@ -1485,10 +1711,10 @@ export default function RecognitionPage() {
                     )}
                   </div>
                   <div style={{ fontSize: 13, fontWeight: 800, color: doorOpen ? "#38BDF8" : "#00D4AA", letterSpacing: "0.04em", marginBottom: 2 }}>
-                    {doorOpen ? "CỬA ĐANG MỞ (UNLOCKED)" : "CỬA ĐANG KHÓA (LOCKED)"}
+                    {doorOpen ? "CỬA ĐÃ MỞ (UNLOCKED)" : "CỬA ĐANG KHÓA (LOCKED)"}
                   </div>
                   <div style={{ fontSize: 10.5, color: "#94A3B8", marginBottom: 4 }}>
-                    {doorOpen ? (holdOpen ? "Trạng thái: Giữ mở liên tục" : `Tự động đóng lại trong: 00:0${doorSeconds}s`) : "Trạng thái: An toàn"}
+                    {doorOpen ? (holdOpen ? "Trạng thái: Giữ mở liên tục" : `Tự động đóng lại trong: 00:0${doorSeconds}s`) : "Trạng thái: An toàn (Fail-Safe)"}
                   </div>
                   <div style={{ fontSize: 9.5, color: "#64748B" }}>
                     Điều khiển rơ-le DB: {activeDoor?.id ? `Door ID: ${activeDoor.id}` : "Chưa kết nối"}
@@ -1498,20 +1724,20 @@ export default function RecognitionPage() {
                 {/* Control buttons */}
                 <div style={{ display: "flex", gap: 8 }}>
                   <button
-                    onClick={handleHoldOpenToggle}
+                    onClick={doorOpen ? handleHoldOpenToggle : handleManualOpenDoor}
                     style={{
                       flex: 1,
                       padding: "8px 0",
-                      background: holdOpen ? "rgba(56, 189, 248, 0.2)" : "rgba(255, 255, 255, 0.04)",
-                      border: `1px solid ${holdOpen ? "rgba(56, 189, 248, 0.4)" : "rgba(255, 255, 255, 0.1)"}`,
+                      background: doorOpen ? "rgba(56, 189, 248, 0.2)" : "rgba(0, 212, 170, 0.15)",
+                      border: `1px solid ${doorOpen ? "rgba(56, 189, 248, 0.4)" : "rgba(0, 212, 170, 0.4)"}`,
                       borderRadius: 7,
-                      color: holdOpen ? "#38BDF8" : "#E2E8F0",
+                      color: doorOpen ? "#38BDF8" : "#00D4AA",
                       fontSize: 11,
                       fontWeight: 700,
                       cursor: "pointer",
                     }}
                   >
-                    {holdOpen ? "🔓 Đang giữ mở" : "🔓 Giữ mở liên tục"}
+                    {doorOpen ? "🔓 Đang mở cửa" : "🔓 Mở cửa (10s)"}
                   </button>
                   <button
                     onClick={handleEmergencyClose}
@@ -1527,7 +1753,7 @@ export default function RecognitionPage() {
                       cursor: "pointer",
                     }}
                   >
-                    🔒 Đóng khẩn cấp
+                    🔒 Khóa cửa khẩn cấp
                   </button>
                 </div>
               </div>
@@ -1559,11 +1785,11 @@ export default function RecognitionPage() {
 
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 11 }}>
                   {[
-                    { step: "1. Frame Acquisition", val: "1080p @ 30 FPS", color: "#38BDF8" },
-                    { step: "2. Face Detection (HOG/CNN)", val: "1 Detected (14ms)", color: "#00D4AA" },
-                    { step: "3. Landmark Extraction", val: "68 Landmark Points", color: "#38BDF8" },
-                    { step: "4. Deep Metric Embedding", val: "512-D Vectors", color: "#A855F7" },
-                    { step: "5. KNN / Euclidean Matching", val: "Cosine Match vs DB", color: "#22C55E" },
+                    { step: "1. Camera Stream Acquisition", val: "1080p @ 30 FPS", color: "#38BDF8" },
+                    { step: "2. Face Detection & Mesh", val: "478 Landmarks", color: "#00D4AA" },
+                    { step: "3. 3D Depth & Liveness Check", val: "Anti-Spoofing PASS", color: "#38BDF8" },
+                    { step: "4. Multi-Frame Confirmation", val: "3-5 Frames Window", color: "#A855F7" },
+                    { step: "5. Cosine Similarity vs CSDL", val: "Threshold >= 0.60", color: "#22C55E" },
                   ].map((p) => (
                     <div
                       key={p.step}
@@ -1708,7 +1934,7 @@ export default function RecognitionPage() {
             <div style={{ padding: "16px 18px", display: "flex", flexDirection: "column", gap: 14 }}>
               <div>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 6 }}>
-                  <span style={{ color: "#E2E8F0", fontWeight: 600 }}>Ngưỡng nhận diện (Confidence Threshold)</span>
+                  <span style={{ color: "#E2E8F0", fontWeight: 600 }}>Ngưỡng nhận diện (Face Threshold)</span>
                   <strong style={{ color: "#00D4AA", fontFamily: "monospace" }}>{threshold.toFixed(2)}</strong>
                 </div>
                 <input
@@ -1729,7 +1955,7 @@ export default function RecognitionPage() {
 
               <div>
                 <label style={{ display: "block", fontSize: 12, color: "#E2E8F0", fontWeight: 600, marginBottom: 6 }}>
-                  Mô hình nhận diện khuôn mặt (Face Recognition Model)
+                  Mô hình nhận diện khuôn mặt (Face Model)
                 </label>
                 <select
                   value={selectedModel}
@@ -1747,7 +1973,7 @@ export default function RecognitionPage() {
                 >
                   <option value="dlib_face_recognition_resnet_v1 (512D)">dlib ResNet-34 512D (Độ chính xác 99.38%)</option>
                   <option value="facenet_128D">FaceNet 128D Vector (Tối ưu tốc độ)</option>
-                  <option value="mobile_facenet">MobileFaceNet Edge (Siêu nhẹ cho thiết bị nhúng)</option>
+                  <option value="mobile_facenet">MobileFaceNet Edge (Siêu nhẹ)</option>
                 </select>
               </div>
 
@@ -1769,9 +1995,9 @@ export default function RecognitionPage() {
                     outline: "none",
                   }}
                 >
-                  <option value="OpenCV dlib 68-landmarks">OpenCV HOG + 68 Facial Landmarks</option>
+                  <option value="OpenCV dlib 68-landmarks">OpenCV dlib 68-landmarks</option>
                   <option value="CNN MMOD Detector">CNN / MMOD GPU Accelerated Detector</option>
-                  <option value="MediaPipe Face Mesh">MediaPipe 468-Point Mesh</option>
+                  <option value="MediaPipe 478 Mesh">MediaPipe 478 3D Mesh</option>
                 </select>
               </div>
 

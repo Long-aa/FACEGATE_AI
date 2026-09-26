@@ -297,6 +297,10 @@ class DashboardStatsOut(BaseModel):
     unresolved_alerts: int
     total_alerts: int
     recognition_rate: float
+    today_access_count: Optional[int] = None
+    granted_count: Optional[int] = None
+    denied_count: Optional[int] = None
+    success_rate: Optional[float] = None
 
 
 class AiEngineStatusOut(BaseModel):

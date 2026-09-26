@@ -4,6 +4,12 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { api } from "@/lib/api";
+import { useRealtimeEvents, RealtimeEventPayload } from "@/lib/useRealtimeEvents";
+import {
+  RecognitionPipelineController,
+  FaceBoundingBox,
+  FrameAnalysis,
+} from "@/lib/recognitionPipeline";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types & Mock Data
@@ -259,8 +265,15 @@ export default function DashboardPage() {
   const [doors, setDoors] = useState<any[]>([]);
   const [activeDoor, setActiveDoor] = useState<any>(null);
   const [isLocked, setIsLocked] = useState(true);
-  const [doorTimer, setDoorTimer] = useState(8);
+  const [doorTimer, setDoorTimer] = useState(10);
   const [isDoorOperating, setIsDoorOperating] = useState(false);
+
+  // Live Detection HUD on Dashboard Video
+  const [dynamicBbox, setDynamicBbox] = useState<FaceBoundingBox | null>(null);
+  const [detectedName, setDetectedName] = useState<string>("Đang quét...");
+  const [detectedConfidence, setDetectedConfidence] = useState<number>(0);
+  const pipelineRef = useRef<RecognitionPipelineController | null>(null);
+  const animFrameRef = useRef<number | null>(null);
 
   // Alerts from DB
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -302,7 +315,19 @@ export default function DashboardPage() {
         api.alerts.list({ limit: 3, status: "UNRESOLVED" }),
       ]);
 
-      if (statsData) setStats(statsData);
+      if (statsData) {
+        setStats({
+          total_users: statsData.total_users || 0,
+          today_access_count: statsData.today_entries ?? statsData.today_access_count ?? 0,
+          granted_count: statsData.success_recognitions ?? statsData.granted_count ?? 0,
+          denied_count: statsData.denied_access ?? statsData.denied_count ?? 0,
+          active_cameras: statsData.active_cameras ?? 0,
+          total_cameras: statsData.total_cameras ?? 0,
+          unresolved_alerts: statsData.unresolved_alerts ?? 0,
+          success_rate: statsData.recognition_rate ?? statsData.success_rate ?? 0,
+        });
+      }
+
       if (aiData) setAiEngine(aiData);
 
       if (logsData && logsData.length > 0) {
@@ -310,22 +335,22 @@ export default function DashboardPage() {
           logsData.map((l: any) => ({
             id: l.id,
             time: l.time || new Date(l.created_at).toLocaleTimeString("vi-VN"),
-            initials: l.initials || l.name?.split(" ").map((n: string) => n[0]).slice(-2).join("") || "?",
-            name: l.name || "Unknown",
-            code: l.user_code || "--",
-            checkpoint: l.checkpoint || l.door_name || "Cửa chính",
+            initials: l.initials || l.user_name?.split(" ").map((n: string) => n[0]).slice(-2).join("") || "?",
+            name: l.user_name || "Unknown",
+            code: l.employee_id || "--",
+            checkpoint: l.door_name || l.camera_name || "Cửa chính",
             confidence: l.confidence || 0,
-            status: l.status === "GRANTED" ? "GRANTED" : "DENIED",
-            color: l.color || (l.status === "GRANTED" ? "#00D4AA" : "#EF4444"),
+            status: l.result === "GRANTED" ? "GRANTED" : "DENIED",
+            color: l.result === "GRANTED" ? "#00D4AA" : "#EF4444",
           }))
         );
       }
 
       if (doorsData && doorsData.length > 0) {
         setDoors(doorsData);
-        const mainDoor = doorsData.find((d: any) => d.name?.includes("chính") || d.door_code?.includes("MAIN")) || doorsData[0];
+        const mainDoor = doorsData.find((d: any) => d.name?.includes("chính") || d.door_code?.includes("D-001")) || doorsData[0];
         setActiveDoor(mainDoor);
-        setIsLocked(mainDoor.status === "LOCKED");
+        setIsLocked(mainDoor.lock_status !== "Unlocked");
       }
 
       if (camerasData && camerasData.length > 0) {
@@ -333,7 +358,7 @@ export default function DashboardPage() {
           id: c.id,
           name: c.name,
           location: c.location || "Khu vực toà nhà",
-          rtsp: c.stream_url || `RTSP: ${c.name}`,
+          rtsp: c.rtsp_url || c.ip_address || `RTSP: ${c.name}`,
           isWebcam: false,
         }));
         mappedCams.push({
@@ -344,9 +369,6 @@ export default function DashboardPage() {
           isWebcam: true,
         });
         setAvailableCams(mappedCams);
-        if (!selectedCam || selectedCam.id === DEFAULT_CAMERAS[0].id) {
-          setSelectedCam(mappedCams[0]);
-        }
       }
 
       if (alertsData) {
@@ -360,13 +382,59 @@ export default function DashboardPage() {
     } catch (err) {
       console.error("Dashboard failed to load from API:", err);
     }
-  }, [selectedCam]);
+  }, []);
 
   useEffect(() => {
     fetchAllData();
-    const interval = setInterval(fetchAllData, 10000);
+    const interval = setInterval(fetchAllData, 12000);
     return () => clearInterval(interval);
   }, [fetchAllData]);
+
+  // Realtime WebSocket synchronization (no page reload needed)
+  useRealtimeEvents(
+    useCallback(
+      (event: RealtimeEventPayload) => {
+        if (event.type === "RECOGNITION_EVENT") {
+          const d = event.data;
+          const isGranted = d.result === "GRANTED";
+          const newEntry: AccessLogItem = {
+            id: d.log_id || String(Date.now()),
+            time: d.time,
+            initials: d.user_name.split(" ").map((n: string) => n[0]).slice(-2).join("") || "?",
+            name: d.user_name,
+            code: d.employee_id || "--",
+            checkpoint: d.door_name || "Cửa chính",
+            confidence: d.confidence,
+            status: isGranted ? "GRANTED" : "DENIED",
+            color: isGranted ? "#00D4AA" : "#EF4444",
+          };
+
+          setRecentLogs((prev) => [newEntry, ...prev.slice(0, 4)]);
+
+          // Update door state
+          if (d.door_unlocked) {
+            setIsLocked(false);
+            setDoorTimer(d.auto_lock_seconds || 10);
+          }
+
+          // Update KPI stats dynamically
+          setStats((prev: any) => ({
+            ...prev,
+            today_access_count: (prev.today_access_count || 0) + 1,
+            granted_count: isGranted ? (prev.granted_count || 0) + 1 : prev.granted_count,
+            denied_count: !isGranted ? (prev.denied_count || 0) + 1 : prev.denied_count,
+          }));
+        } else if (event.type === "DOOR_UPDATE") {
+          const unlocked = event.data.lock_status === "Unlocked";
+          setIsLocked(!unlocked);
+          if (unlocked) {
+            setDoorTimer(event.data.duration || 10);
+          }
+        }
+      },
+      []
+    )
+  );
 
   // 1. Clock and telemetry interval
   useEffect(() => {
@@ -386,24 +454,28 @@ export default function DashboardPage() {
     return () => clearInterval(timer);
   }, []);
 
-  // 2. Auto-lock countdown timer
+  // 2. Auto-lock 10s countdown timer
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (!isLocked) {
       interval = setInterval(() => {
         setDoorTimer((prev) => {
           if (prev <= 1) {
+            // Call API to lock door in database
+            if (activeDoor?.id) {
+              api.doors.lock(activeDoor.id).catch(() => {});
+            }
             setIsLocked(true);
-            return 8;
+            return 10;
           }
           return prev - 1;
         });
       }, 1000);
     } else {
-      setDoorTimer(8);
+      setDoorTimer(10);
     }
     return () => clearInterval(interval);
-  }, [isLocked]);
+  }, [isLocked, activeDoor]);
 
   // 3. Handle Door Unlock (persisted to DB)
   const handleOpenDoor = useCallback(async () => {
@@ -411,10 +483,10 @@ export default function DashboardPage() {
     setIsDoorOperating(true);
     try {
       if (activeDoor?.id) {
-        await api.doors.unlock(activeDoor.id, 8);
+        await api.doors.unlock(activeDoor.id, 10);
       }
       setIsLocked(false);
-      setDoorTimer(8);
+      setDoorTimer(10);
       const now = new Date();
       const timeStr = now.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
       setToastData({
@@ -423,24 +495,6 @@ export default function DashboardPage() {
         time: timeStr,
       });
       setShowToast(true);
-
-      // Refresh recent logs from DB
-      const updatedLogs = await api.dashboard.getRecentLogs(5);
-      if (updatedLogs) {
-        setRecentLogs(
-          updatedLogs.map((l: any) => ({
-            id: l.id,
-            time: l.time || new Date(l.created_at).toLocaleTimeString("vi-VN"),
-            initials: l.initials || l.name?.split(" ").map((n: string) => n[0]).slice(-2).join("") || "?",
-            name: l.name || "Unknown",
-            code: l.user_code || "--",
-            checkpoint: l.checkpoint || l.door_name || "Cửa chính",
-            confidence: l.confidence || 0,
-            status: l.status === "GRANTED" ? "GRANTED" : "DENIED",
-            color: l.color || (l.status === "GRANTED" ? "#00D4AA" : "#EF4444"),
-          }))
-        );
-      }
     } catch (err) {
       console.error("Failed to unlock door:", err);
     } finally {
@@ -457,7 +511,7 @@ export default function DashboardPage() {
         await api.doors.lock(activeDoor.id);
       }
       setIsLocked(true);
-      setDoorTimer(8);
+      setDoorTimer(10);
     } catch (err) {
       console.error("Failed to lock door:", err);
     } finally {
@@ -465,9 +519,17 @@ export default function DashboardPage() {
     }
   }, [activeDoor, isDoorOperating]);
 
-  // 5. Webcam stream switcher
+  // 5. Webcam stream switcher and AI pipeline runner
   useEffect(() => {
     if (selectedCam.isWebcam) {
+      const pipeline = new RecognitionPipelineController();
+      pipelineRef.current = pipeline;
+      pipeline.configure({
+        threshold: faceThreshold,
+        doorId: activeDoor?.id,
+      });
+      pipeline.initialize().catch(() => {});
+
       navigator.mediaDevices
         ?.getUserMedia({ video: { width: 1280, height: 720 } })
         .then((stream) => {
@@ -475,23 +537,61 @@ export default function DashboardPage() {
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
             videoRef.current.play().catch(() => {});
+            pipeline.setVideoElement(videoRef.current);
           }
         })
         .catch((err) => {
           console.error("Webcam access denied or unavailable:", err);
         });
+
+      let isRunning = true;
+      const processLoop = async () => {
+        if (!isRunning) return;
+        if (pipelineRef.current && videoRef.current) {
+          try {
+            const analysis: FrameAnalysis = await pipelineRef.current.processFrame();
+            setDynamicBbox(analysis.boundingBox);
+            if (analysis.verificationResult) {
+              setDetectedName(analysis.verificationResult.userName);
+              setDetectedConfidence(analysis.verificationResult.confidence);
+              if (analysis.verificationResult.result === "GRANTED") {
+                setIsLocked(false);
+                setDoorTimer(analysis.verificationResult.autoLockSeconds || 10);
+              }
+            } else if (analysis.faceCount === 0) {
+              setDynamicBbox(null);
+              setDetectedName("Đang chờ khuôn mặt...");
+              setDetectedConfidence(0);
+            }
+          } catch {}
+        }
+        if (isRunning) {
+          animFrameRef.current = requestAnimationFrame(processLoop);
+        }
+      };
+
+      animFrameRef.current = requestAnimationFrame(processLoop);
+
+      return () => {
+        isRunning = false;
+        if (animFrameRef.current) {
+          cancelAnimationFrame(animFrameRef.current);
+          animFrameRef.current = null;
+        }
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+          mediaStreamRef.current = null;
+        }
+        pipeline.destroy();
+      };
     } else {
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach((track) => track.stop());
         mediaStreamRef.current = null;
       }
+      setDynamicBbox(null);
     }
-    return () => {
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      }
-    };
-  }, [selectedCam]);
+  }, [selectedCam, faceThreshold, activeDoor]);
 
   // 6. Fullscreen Toggle
   const toggleFullscreen = () => {
@@ -888,13 +988,62 @@ export default function DashboardPage() {
           >
             {/* 1. Video or Offline State */}
             {selectedCam.isWebcam ? (
-              <video
-                ref={videoRef}
-                autoPlay
-                playsInline
-                muted
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
-              />
+              <>
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }}
+                />
+                {dynamicBbox && (
+                  <div
+                    style={{
+                      position: "absolute",
+                      left: `${(1 - dynamicBbox.x - dynamicBbox.width) * 100}%`,
+                      top: `${dynamicBbox.y * 100}%`,
+                      width: `${dynamicBbox.width * 100}%`,
+                      height: `${dynamicBbox.height * 100}%`,
+                      border: `2px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`,
+                      boxShadow: `0 0 15px ${!isLocked ? "rgba(34, 197, 94, 0.4)" : "rgba(56, 189, 248, 0.4)"}`,
+                      pointerEvents: "none",
+                      zIndex: 10,
+                      transition: "all 0.05s linear",
+                    }}
+                  >
+                    <span style={{ position: "absolute", top: -2, left: -2, width: 10, height: 10, borderTop: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`, borderLeft: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}` }} />
+                    <span style={{ position: "absolute", top: -2, right: -2, width: 10, height: 10, borderTop: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`, borderRight: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}` }} />
+                    <span style={{ position: "absolute", bottom: -2, left: -2, width: 10, height: 10, borderBottom: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`, borderLeft: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}` }} />
+                    <span style={{ position: "absolute", bottom: -2, right: -2, width: 10, height: 10, borderBottom: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`, borderRight: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}` }} />
+                    
+                    <div
+                      style={{
+                        position: "absolute",
+                        bottom: "100%",
+                        left: "50%",
+                        transform: "translateX(-50%)",
+                        marginBottom: 4,
+                        background: "rgba(10, 20, 36, 0.95)",
+                        border: `1px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`,
+                        borderRadius: 4,
+                        padding: "2px 6px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <span style={{ width: 4, height: 4, borderRadius: "50%", background: !isLocked ? "#22C55E" : "#38BDF8" }} />
+                      <span style={{ fontSize: 9.5, fontWeight: 700, color: "#F8FAFC" }}>{detectedName}</span>
+                      {detectedConfidence > 0 && (
+                        <span style={{ fontSize: 9, fontWeight: 800, color: !isLocked ? "#22C55E" : "#38BDF8", fontFamily: "monospace" }}>
+                          {detectedConfidence.toFixed(1)}%
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </>
             ) : (
               <div
                 style={{
@@ -1494,11 +1643,15 @@ export default function DashboardPage() {
             </div>
             <div>
               <span style={{ fontSize: 11, color: "#64748B" }}>Tổng truy cập: </span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#F8FAFC" }}>1,284</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#F8FAFC" }}>
+                {(stats?.today_access_count ?? stats?.today_entries ?? 0).toLocaleString()}
+              </span>
             </div>
             <div>
               <span style={{ fontSize: 11, color: "#64748B" }}>Tỷ lệ thành công: </span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#22C55E" }}>92.8%</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#22C55E" }}>
+                {Number(stats?.success_rate ?? stats?.recognition_rate ?? 0).toFixed(1)}%
+              </span>
             </div>
           </div>
 

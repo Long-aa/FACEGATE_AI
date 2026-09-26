@@ -91,6 +91,10 @@ def get_dashboard_stats(db: Session = Depends(get_db)) -> Any:
         unresolved_alerts=unresolved_alerts,
         total_alerts=total_alerts,
         recognition_rate=rate,
+        today_access_count=today_entries,
+        granted_count=success_recognitions,
+        denied_count=denied_access,
+        success_rate=rate,
     )
 
 
