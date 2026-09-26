@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { ToastContainer } from "@/components/ui/ToastNotification";
+import { TFLiteConsoleFilter } from "@/components/TFLiteConsoleFilter";
 
 export const metadata: Metadata = {
   title: "FaceGate AI — Hệ Thống Kiểm Soát An Toàn",
@@ -23,6 +24,7 @@ export default function RootLayout({
         />
       </head>
       <body>
+        <TFLiteConsoleFilter />
         {children}
         <ToastContainer />
       </body>

@@ -189,6 +189,7 @@ export class RecognitionPipelineController {
   private videoEl: HTMLVideoElement | null = null;
   private landmarker: FaceLandmarker | null = null;
   private lastVideoTime = -1;
+  private lastTimestampMs = 0;
 
   // Multi-frame verification buffer (3-5 frames)
   private predictionQueue: {
@@ -208,6 +209,13 @@ export class RecognitionPipelineController {
   private blinkCounter = 0;
   private lastCallTime = 0;
 
+  // Alert and recognition session tracking:
+  // 1. "Người không xác định": gửi cảnh báo về hệ thống 5s một lần (5000ms)
+  private lastUnknownAlertTime = 0;
+  // 2. "Người đúng có hiện tên": chỉ gửi cảnh báo về hệ thống 1 lần per session
+  private activeRecognizedUser: string | null = null;
+  private hasAlertedRecognizedUser = false;
+
   // Active configurations
   private threshold = 0.60;
   private targetDoorId: string | null = null;
@@ -224,6 +232,7 @@ export class RecognitionPipelineController {
   public setVideoElement(video: HTMLVideoElement | null) {
     this.videoEl = video;
     this.lastVideoTime = -1;
+    this.lastTimestampMs = 0;
   }
 
   public async initialize(): Promise<void> {
@@ -265,7 +274,15 @@ export class RecognitionPipelineController {
       statusText: "Đang chờ nhận diện...",
     };
 
-    if (!this.videoEl || !this.landmarker || this.videoEl.readyState < 2) {
+    if (
+      !this.videoEl ||
+      !this.landmarker ||
+      this.videoEl.readyState < 2 ||
+      !this.videoEl.videoWidth ||
+      !this.videoEl.videoHeight ||
+      this.videoEl.paused ||
+      this.videoEl.ended
+    ) {
       this.state = "CAMERA_READY";
       emptyAnalysis.statusText = "Đang chờ kết nối Camera...";
       return emptyAnalysis;
@@ -283,13 +300,33 @@ export class RecognitionPipelineController {
     }
     this.lastVideoTime = this.videoEl.currentTime;
 
-    // Run MediaPipe detection
-    const results = this.landmarker.detectForVideo(this.videoEl, now);
+    // Ensure monotonically increasing timestamp for MediaPipe VIDEO runningMode
+    let timestampMs = performance.now();
+    if (timestampMs <= this.lastTimestampMs) {
+      timestampMs = this.lastTimestampMs + 1;
+    }
+    this.lastTimestampMs = timestampMs;
+
+    // Run MediaPipe detection safely with try-catch
+    let results: any = null;
+    try {
+      results = this.landmarker.detectForVideo(this.videoEl, timestampMs);
+    } catch {
+      return emptyAnalysis;
+    }
+
+    if (!results || !results.faceLandmarks) {
+      return emptyAnalysis;
+    }
+
     const faceCount = results.faceLandmarks.length;
 
     if (faceCount === 0) {
       this.predictionQueue = [];
       this.state = "WAITING_FOR_FACE";
+      this.activeRecognizedUser = null;
+      this.hasAlertedRecognizedUser = false;
+      this.lastUnknownAlertTime = 0;
       emptyAnalysis.statusText = "Vui lòng nhìn vào camera để nhận diện";
       return emptyAnalysis;
     }
@@ -297,6 +334,8 @@ export class RecognitionPipelineController {
     if (faceCount > 1) {
       this.predictionQueue = [];
       this.state = "MULTIPLE_FACES";
+      this.activeRecognizedUser = null;
+      this.hasAlertedRecognizedUser = false;
       emptyAnalysis.faceCount = faceCount;
       emptyAnalysis.statusText = "PHÁT HIỆN NHIỀU KHUÔN MẶT! Vui lòng chỉ 1 người vào khung hình.";
       return emptyAnalysis;
@@ -358,6 +397,22 @@ export class RecognitionPipelineController {
     // 3. Biometric Vector Extraction
     const faceVector = extractGeometricFaceVector(landmarks);
 
+    // Rate-limiting check based on user request:
+    // 1. "người đúng có hiện tên và chỉ gửi cảnh báo về hệ thống 1 lần"
+    if (this.hasAlertedRecognizedUser && this.activeRecognizedUser) {
+      emptyAnalysis.verificationResult = this.lastVerificationResult;
+      emptyAnalysis.state = this.state;
+      return emptyAnalysis;
+    }
+
+    // 2. "người không xác định thì gửi cảnh báo về hệ thống 5s một lần"
+    if (this.state === "UNKNOWN" && now - this.lastUnknownAlertTime < 5000) {
+      emptyAnalysis.verificationResult = this.lastVerificationResult;
+      emptyAnalysis.state = "UNKNOWN";
+      emptyAnalysis.statusText = "✕ NGƯỜI KHÔNG XÁC ĐỊNH • CỬA TIẾP TỤC KHÓA (Cảnh báo 5s/lần)";
+      return emptyAnalysis;
+    }
+
     // Call API at throttled intervals (every 250ms) to update multi-frame buffer
     if (now - this.lastCallTime > 250) {
       this.lastCallTime = now;
@@ -410,17 +465,29 @@ export class RecognitionPipelineController {
           };
           emptyAnalysis.verificationResult = this.lastVerificationResult;
 
+          // Apply alert frequency rules:
+          if (verifyResp.employee_id && verifyResp.user_name && !verifyResp.user_name.includes("Unknown")) {
+            // "người đúng có hiện tên và chỉ gửi cảnh báo về hệ thống 1 lần"
+            this.activeRecognizedUser = verifyResp.employee_id;
+            this.hasAlertedRecognizedUser = true;
+          } else if (verifyResp.result === "UNKNOWN") {
+            // "người không xác định thì gửi cảnh báo về hệ thống 5s một lần"
+            this.lastUnknownAlertTime = now;
+            this.activeRecognizedUser = null;
+            this.hasAlertedRecognizedUser = false;
+          }
+
           if (verifyResp.result === "GRANTED" && verifyResp.door_unlocked) {
             // AUTHORIZED -> OPEN DOOR
             this.state = "DOOR_OPEN";
-            emptyAnalysis.statusText = "✓ NHẬN DIỆN THÀNH CÔNG • CỬA ĐÃ MỞ";
+            emptyAnalysis.statusText = `✓ XÁC THỰC THÀNH CÔNG • ${verifyResp.user_name} • CỬA ĐÃ MỞ`;
             this.startAutoLockCountdown(verifyResp.auto_lock_seconds || 10, verifyResp.door_id);
           } else if (verifyResp.result === "UNAUTHORIZED") {
             this.state = "DENIED";
-            emptyAnalysis.statusText = "✓ ĐÃ NHẬN DIỆN • ✕ KHÔNG CÓ QUYỀN TRUY CẬP (DOOR LOCKED)";
+            emptyAnalysis.statusText = `✓ ĐÃ NHẬN DIỆN • ${verifyResp.user_name} • KHÔNG CÓ QUYỀN TRUY CẬP (DOOR LOCKED)`;
           } else if (verifyResp.result === "UNKNOWN") {
             this.state = "UNKNOWN";
-            emptyAnalysis.statusText = "✕ KHÔNG XÁC ĐỊNH • TỪ CHỐI TRUY CẬP (DOOR LOCKED)";
+            emptyAnalysis.statusText = "✕ NGƯỜI KHÔNG XÁC ĐỊNH • CỬA TIẾP TỤC KHÓA (Cảnh báo 5s/lần)";
           } else {
             this.state = "DENIED";
             emptyAnalysis.statusText = `✕ TỪ CHỐI TRUY CẬP (${verifyResp.message})`;

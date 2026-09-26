@@ -19,10 +19,11 @@ export function useRealtimeEvents(onEvent?: (event: RealtimeEventPayload) => voi
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const onEventRef = useRef(onEvent);
+  const isMountedRef = useRef(true);
   onEventRef.current = onEvent;
 
   const connect = useCallback(() => {
-    if (typeof window === "undefined") return;
+    if (typeof window === "undefined" || !isMountedRef.current) return;
 
     const host = window.location.hostname || "localhost";
     const wsUrl = `ws://${host}:8080/ws/events`;
@@ -32,14 +33,17 @@ export function useRealtimeEvents(onEvent?: (event: RealtimeEventPayload) => voi
       wsRef.current = ws;
 
       ws.onopen = () => {
-        // Send initial ping
+        if (!isMountedRef.current) {
+          try { ws.close(1000, "Unmounted"); } catch {}
+          return;
+        }
         try {
           ws.send("ping");
         } catch {}
       };
 
       ws.onmessage = (e) => {
-        if (e.data === "pong") return;
+        if (!isMountedRef.current || e.data === "pong") return;
         try {
           const payload: RealtimeEventPayload = JSON.parse(e.data);
           if (onEventRef.current) {
@@ -50,19 +54,24 @@ export function useRealtimeEvents(onEvent?: (event: RealtimeEventPayload) => voi
 
       ws.onclose = () => {
         wsRef.current = null;
-        // Reconnect after 3 seconds
+        if (!isMountedRef.current) return;
         reconnectTimeoutRef.current = setTimeout(connect, 3000);
       };
 
       ws.onerror = () => {
-        ws.close();
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          try { wsRef.current.close(); } catch {}
+        }
       };
     } catch {
-      reconnectTimeoutRef.current = setTimeout(connect, 4000);
+      if (isMountedRef.current) {
+        reconnectTimeoutRef.current = setTimeout(connect, 4000);
+      }
     }
   }, []);
 
   useEffect(() => {
+    isMountedRef.current = true;
     connect();
 
     // Heartbeat ping every 25s
@@ -75,10 +84,22 @@ export function useRealtimeEvents(onEvent?: (event: RealtimeEventPayload) => voi
     }, 25000);
 
     return () => {
+      isMountedRef.current = false;
       clearInterval(pingInterval);
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       if (wsRef.current) {
-        wsRef.current.close();
+        const ws = wsRef.current;
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        if (ws.readyState === WebSocket.OPEN) {
+          try { ws.close(1000, "Unmount"); } catch {}
+        } else if (ws.readyState === WebSocket.CONNECTING) {
+          ws.onopen = () => {
+            try { ws.close(1000, "Unmount"); } catch {}
+          };
+        }
         wsRef.current = null;
       }
     };

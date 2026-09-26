@@ -60,6 +60,17 @@ export const api = {
     getRecentLogs: (limit = 10) =>
       request<any[]>(`/api/v1/dashboard/recent-logs?limit=${limit}`),
     getAiEngine: () => request<any>("/api/v1/dashboard/ai-engine"),
+    getAnalytics: (params?: { range?: string; start_date?: string; end_date?: string } | string) => {
+      if (typeof params === "string") {
+        return request<any>(`/api/v1/dashboard/analytics?range=${params}`);
+      }
+      const sp = new URLSearchParams();
+      if (params?.range) sp.append("range", params.range);
+      if (params?.start_date) sp.append("start_date", params.start_date);
+      if (params?.end_date) sp.append("end_date", params.end_date);
+      const qs = sp.toString();
+      return request<any>(`/api/v1/dashboard/analytics${qs ? `?${qs}` : ""}`);
+    },
   },
 
   // ── 2. Users ──────────────────────────────────────────────────

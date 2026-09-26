@@ -320,6 +320,20 @@ class AiEngineStatusOut(BaseModel):
     is_live_service_connected: bool
 
 
+class DashboardAnalyticsOut(BaseModel):
+    range: str
+    total_access: int
+    granted_count: int
+    denied_count: int
+    success_rate: float
+    peak_label: str
+    peak_count: int
+    peak_rate: float
+    labels: List[str]
+    series_granted: List[int]
+    series_denied: List[int]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Report Schemas
 # ─────────────────────────────────────────────────────────────────────────────

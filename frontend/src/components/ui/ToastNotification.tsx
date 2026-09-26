@@ -107,7 +107,7 @@ export function ToastContainer() {
 
   useEffect(() => {
     const handleNewToast = (item: ToastItem) => {
-      setToasts((prev) => [item, ...prev.slice(0, 4)]);
+      setToasts((prev) => [item, ...prev.filter((t) => t.id !== item.id).slice(0, 4)]);
     };
     listeners.add(handleNewToast);
     return () => {
@@ -138,8 +138,8 @@ export function ToastContainer() {
         pointerEvents: "none",
       }}
     >
-      {toasts.map((item) => (
-        <ToastCard key={item.id} item={item} onDismiss={() => removeToast(item.id)} />
+      {toasts.map((item, idx) => (
+        <ToastCard key={`toast-${item.id}-${idx}`} item={item} onDismiss={() => removeToast(item.id)} />
       ))}
       <style
         dangerouslySetInnerHTML={{
@@ -171,18 +171,19 @@ function ToastCard({ item, onDismiss }: { item: ToastItem; onDismiss: () => void
     const intervalTime = 40;
     const step = (intervalTime / duration) * 100;
 
+    // Timeout triggers onDismiss safely in separate event turn
+    const timeout = setTimeout(() => {
+      onDismiss();
+    }, duration);
+
     const interval = setInterval(() => {
-      setProgress((prev) => {
-        if (prev <= 0) {
-          clearInterval(interval);
-          onDismiss();
-          return 0;
-        }
-        return prev - step;
-      });
+      setProgress((prev) => Math.max(0, prev - step));
     }, intervalTime);
 
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(timeout);
+      clearInterval(interval);
+    };
   }, [item.duration, onDismiss, isPaused]);
 
   return (

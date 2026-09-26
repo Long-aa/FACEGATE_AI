@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+import time
 from app.database.session import get_db
 from app.models.access_log import AccessLog
 from app.models.access_rule import AccessRule
@@ -24,6 +25,22 @@ from app.models.user import User
 from app.websocket.manager import ws_manager
 
 router = APIRouter()
+
+# Rate-limiting dictionary for system alerts:
+# 1. UNKNOWN person alert: triggered at most every 5.0 seconds
+# 2. NAMED user alert (UNAUTHORIZED, MANUAL_VERIFY, DENIED): triggered only 1 time per continuous session
+_alert_throttler: dict[str, float] = {}
+
+def check_and_throttle_alert(key: str, min_interval_seconds: float) -> bool:
+    """
+    Returns True if an alert should be created and broadcast; False if throttled.
+    """
+    curr = time.time()
+    last = _alert_throttler.get(key, 0.0)
+    if curr - last >= min_interval_seconds:
+        _alert_throttler[key] = curr
+        return True
+    return False
 
 
 class VerifyRequest(BaseModel):
@@ -278,6 +295,7 @@ async def verify_recognition(
     emp_id = None
     dept = "Khách vãng lai"
     message = "Không tìm thấy khuôn mặt trong CSDL. Từ chối truy cập."
+    created_alert: Optional[Alert] = None
 
     if not user:
         # Unknown person -> strictly DOOR LOCKED
@@ -287,19 +305,23 @@ async def verify_recognition(
         emp_id = None
         message = "Không tìm thấy khuôn mặt trong CSDL. Cửa tiếp tục khóa (Fail-Safe)."
 
-        alert = Alert(
-            alert_type="Người không xác định",
-            description=f"Phát hiện người lạ tại {camera.name if camera else 'Camera'}. Độ tin cậy thấp ({confidence}%). Cửa {door.name} khóa an toàn.",
-            location=door.location,
-            camera_id=camera.id if camera else None,
-            camera_name=camera.name if camera else None,
-            door_id=door.id,
-            door_name=door.name,
-            severity="CRITICAL",
-            status="UNRESOLVED",
-            timestamp=now,
-        )
-        db.add(alert)
+        # User requirement: người không xác định -> gửi cảnh báo về hệ thống 5s một lần
+        throttle_key = f"unknown_{door.id}"
+        if check_and_throttle_alert(throttle_key, min_interval_seconds=5.0):
+            alert = Alert(
+                alert_type="Người không xác định",
+                description=f"Phát hiện người lạ tại {camera.name if camera else 'Camera'}. Độ tin cậy thấp ({confidence}%). Cửa {door.name} khóa an toàn.",
+                location=door.location,
+                camera_id=camera.id if camera else None,
+                camera_name=camera.name if camera else None,
+                door_id=door.id,
+                door_name=door.name,
+                severity="CRITICAL",
+                status="UNRESOLVED",
+                timestamp=now,
+            )
+            db.add(alert)
+            created_alert = alert
 
     elif not liveness_ok:
         # Liveness fail (Anti-spoofing attack or fake photo/video)
@@ -309,19 +331,23 @@ async def verify_recognition(
         emp_id = user.employee_id
         message = f"Phát hiện ảnh/video giả mạo (Anti-spoofing FAIL: score {liveness_score:.2f}). Từ chối mở cửa!"
 
-        alert = Alert(
-            alert_type="Cảnh báo giả mạo (Anti-spoofing FAIL)",
-            description=f"Nghi vấn sử dụng ảnh/video giả mạo tài khoản {user.employee_id} - {user.full_name} tại {camera.name if camera else 'Camera'}.",
-            location=door.location,
-            camera_id=camera.id if camera else None,
-            camera_name=camera.name if camera else None,
-            door_id=door.id,
-            door_name=door.name,
-            severity="CRITICAL",
-            status="UNRESOLVED",
-            timestamp=now,
-        )
-        db.add(alert)
+        # User requirement: nếu có tên -> gửi cảnh báo 1 lần (interval 3600s), nếu chưa có tên -> 5s
+        throttle_key = f"liveness_{user.id}_{door.id}"
+        if check_and_throttle_alert(throttle_key, min_interval_seconds=3600.0):
+            alert = Alert(
+                alert_type="Cảnh báo giả mạo (Anti-spoofing FAIL)",
+                description=f"Nghi vấn sử dụng ảnh/video giả mạo tài khoản {user.employee_id} - {user.full_name} tại {camera.name if camera else 'Camera'}.",
+                location=door.location,
+                camera_id=camera.id if camera else None,
+                camera_name=camera.name if camera else None,
+                door_id=door.id,
+                door_name=door.name,
+                severity="CRITICAL",
+                status="UNRESOLVED",
+                timestamp=now,
+            )
+            db.add(alert)
+            created_alert = alert
 
     elif user.status != "ACTIVE":
         # Inactive, draft, or blocked user
@@ -331,19 +357,23 @@ async def verify_recognition(
         emp_id = user.employee_id
         message = f"Tài khoản {user.full_name} đang ở trạng thái {user.status}. Không được phép ra/vào."
 
-        alert = Alert(
-            alert_type="Tài khoản bị khóa/Chưa kích hoạt",
-            description=f"Tài khoản {user.employee_id} - {user.full_name} ({user.status}) cố gắng mở cửa {door.name}.",
-            location=door.location,
-            camera_id=camera.id if camera else None,
-            camera_name=camera.name if camera else None,
-            door_id=door.id,
-            door_name=door.name,
-            severity="WARNING",
-            status="UNRESOLVED",
-            timestamp=now,
-        )
-        db.add(alert)
+        # User requirement: người đúng có hiện tên -> chỉ gửi cảnh báo về hệ thống 1 lần
+        throttle_key = f"user_status_{user.id}_{door.id}"
+        if check_and_throttle_alert(throttle_key, min_interval_seconds=3600.0):
+            alert = Alert(
+                alert_type="Tài khoản bị khóa/Chưa kích hoạt",
+                description=f"Tài khoản {user.employee_id} - {user.full_name} ({user.status}) cố gắng mở cửa {door.name}.",
+                location=door.location,
+                camera_id=camera.id if camera else None,
+                camera_name=camera.name if camera else None,
+                door_id=door.id,
+                door_name=door.name,
+                severity="WARNING",
+                status="UNRESOLVED",
+                timestamp=now,
+            )
+            db.add(alert)
+            created_alert = alert
 
     elif payload.multi_frame_count is not None and payload.multi_frame_count < 3:
         # Multi-frame verification: requires at least 3 consecutive consistent frames
@@ -363,19 +393,23 @@ async def verify_recognition(
         door_unlocked = False
         message = f"Cần xác minh thủ công: Độ tin cậy nhận diện ({confidence}%) hoặc sinh trắc cận ngưỡng. Cửa khóa an toàn chờ đối soát."
 
-        alert = Alert(
-            alert_type="Cần xác minh thủ công (Manual Verify)",
-            description=f"Nhân viên {user.employee_id} - {user.full_name} ({user.department}) có độ tin cậy cận ngưỡng ({confidence}%). Cửa {door.name} khóa an toàn.",
-            location=door.location,
-            camera_id=camera.id if camera else None,
-            camera_name=camera.name if camera else None,
-            door_id=door.id,
-            door_name=door.name,
-            severity="INFO",
-            status="UNRESOLVED",
-            timestamp=now,
-        )
-        db.add(alert)
+        # User requirement: người đúng có hiện tên -> chỉ gửi cảnh báo về hệ thống 1 lần
+        throttle_key = f"user_manual_{user.id}_{door.id}"
+        if check_and_throttle_alert(throttle_key, min_interval_seconds=3600.0):
+            alert = Alert(
+                alert_type="Cần xác minh thủ công (Manual Verify)",
+                description=f"Nhân viên {user.employee_id} - {user.full_name} ({user.department}) có độ tin cậy cận ngưỡng ({confidence}%). Cửa {door.name} khóa an toàn.",
+                location=door.location,
+                camera_id=camera.id if camera else None,
+                camera_name=camera.name if camera else None,
+                door_id=door.id,
+                door_name=door.name,
+                severity="INFO",
+                status="UNRESOLVED",
+                timestamp=now,
+            )
+            db.add(alert)
+            created_alert = alert
 
     else:
         # User is active, liveness passed, and frames confirmed -> Check Door Access Rules
@@ -387,19 +421,23 @@ async def verify_recognition(
             emp_id = user.employee_id
             message = f"Đã nhận diện: {user.full_name} ({user.employee_id}) nhưng TỪ CHỐI TRUY CẬP: {perm_reason}."
 
-            alert = Alert(
-                alert_type="Không có quyền ra vào",
-                description=f"Nhân viên {user.employee_id} - {user.full_name} ({user.department}) không có quyền vào {door.name}. Lý do: {perm_reason}.",
-                location=door.location,
-                camera_id=camera.id if camera else None,
-                camera_name=camera.name if camera else None,
-                door_id=door.id,
-                door_name=door.name,
-                severity="WARNING",
-                status="UNRESOLVED",
-                timestamp=now,
-            )
-            db.add(alert)
+            # User requirement: người đúng có hiện tên -> chỉ gửi cảnh báo về hệ thống 1 lần
+            throttle_key = f"user_unauth_{user.id}_{door.id}"
+            if check_and_throttle_alert(throttle_key, min_interval_seconds=3600.0):
+                alert = Alert(
+                    alert_type="Không có quyền ra vào",
+                    description=f"Nhân viên {user.employee_id} - {user.full_name} ({user.department}) không có quyền vào {door.name}. Lý do: {perm_reason}.",
+                    location=door.location,
+                    camera_id=camera.id if camera else None,
+                    camera_name=camera.name if camera else None,
+                    door_id=door.id,
+                    door_name=door.name,
+                    severity="WARNING",
+                    status="UNRESOLVED",
+                    timestamp=now,
+                )
+                db.add(alert)
+                created_alert = alert
         else:
             # ALL CRITERIA PASSED -> AUTHORIZED -> OPEN DOOR
             result = "GRANTED"
@@ -444,6 +482,27 @@ async def verify_recognition(
     db.refresh(log)
 
     time_str = now.strftime("%H:%M:%S")
+
+    # Broadcast new Alert if one was created
+    if created_alert:
+        try:
+            db.refresh(created_alert)
+            await ws_manager.broadcast({
+                "type": "ALERT_NEW",
+                "data": {
+                    "id": created_alert.id,
+                    "title": created_alert.alert_type,
+                    "alert_type": created_alert.alert_type,
+                    "description": created_alert.description,
+                    "severity": created_alert.severity,
+                    "location": created_alert.location,
+                    "door_name": created_alert.door_name,
+                    "camera_name": created_alert.camera_name,
+                    "timestamp": created_alert.timestamp.isoformat() if created_alert.timestamp else now.isoformat(),
+                }
+            })
+        except Exception:
+            pass
 
     # 7. Broadcast real-time event via WebSocket
     try:

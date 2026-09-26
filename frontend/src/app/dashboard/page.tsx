@@ -102,6 +102,62 @@ const INITIAL_LOGS: AccessLogItem[] = [
   },
 ];
 
+export interface AnalyticsData {
+  range: string;
+  total_access: number;
+  granted_count: number;
+  denied_count: number;
+  success_rate: number;
+  peak_label: string;
+  peak_count: number;
+  peak_rate: number;
+  labels: string[];
+  series_granted: number[];
+  series_denied: number[];
+}
+
+function getInitials(name?: string): string {
+  if (!name) return "?";
+  const clean = name.trim();
+  const lower = clean.toLowerCase();
+  if (
+    lower.includes("không xác định") ||
+    lower.includes("unknown") ||
+    lower.includes("người lạ") ||
+    lower.includes("chưa xác định")
+  ) {
+    return "?";
+  }
+  const parts = clean.replace(/[()\[\]]/g, "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[parts.length - 2][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function pointsToSmoothPath(points: { x: number; y: number }[]): string {
+  if (!points || points.length === 0) return "M 0 145 L 900 145";
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y} L 900 ${points[0].y}`;
+
+  let d = `M ${points[0].x} ${points[0].y}`;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i === 0 ? i : i - 1];
+    const p1 = points[i];
+    const p2 = points[i + 1];
+    const p3 = points[i + 2 < points.length ? i + 2 : i + 1];
+
+    const cp1x = p1.x + (p2.x - p0.x) / 6;
+    let cp1y = p1.y + (p2.y - p0.y) / 6;
+    const cp2x = p2.x - (p3.x - p1.x) / 6;
+    let cp2y = p2.y - (p3.y - p1.y) / 6;
+
+    cp1y = Math.max(15, Math.min(cp1y, 155));
+    cp2y = Math.max(15, Math.min(cp2y, 155));
+
+    d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+  }
+  return d;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Animated Counter Hook
 // ─────────────────────────────────────────────────────────────────────────────
@@ -289,8 +345,58 @@ export default function DashboardPage() {
     time: "10:45:22",
   });
 
-  // Access Analytics time range filter
-  const [analyticsRange, setAnalyticsRange] = useState<"today" | "7days" | "30days">("today");
+  // Helper to format date as YYYY-MM-DD
+  const formatDateISO = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+
+  // Custom date range filter (Từ ngày -> Đến ngày)
+  const [startDate, setStartDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    return formatDateISO(d);
+  });
+  const [endDate, setEndDate] = useState<string>(() => formatDateISO(new Date()));
+
+  const dateRangeRef = useRef<{ start: string; end: string }>({
+    start: startDate,
+    end: endDate,
+  });
+  dateRangeRef.current = { start: startDate, end: endDate };
+
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsData>({
+    range: "",
+    total_access: 0,
+    granted_count: 0,
+    denied_count: 0,
+    success_rate: 0,
+    peak_label: "08:00 - 10:00",
+    peak_count: 0,
+    peak_rate: 0,
+    labels: ["00:00", "03:00", "06:00", "08:00", "10:00", "13:00", "16:00", "19:00", "22:00"],
+    series_granted: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+    series_denied: [0, 0, 0, 0, 0, 0, 0, 0, 0],
+  });
+
+  const fetchAnalytics = useCallback(async (start?: string, end?: string) => {
+    try {
+      const s = start || dateRangeRef.current.start;
+      const e = end || dateRangeRef.current.end;
+      const data = await api.dashboard.getAnalytics({ start_date: s, end_date: e });
+      if (data && Array.isArray(data.labels)) {
+        setAnalyticsData(data);
+      }
+    } catch (err) {
+      console.warn("Analytics fetch fallback:", err);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAnalytics(startDate, endDate);
+  }, [startDate, endDate, fetchAnalytics]);
 
   // Recent Logs from DB
   const [recentLogs, setRecentLogs] = useState<AccessLogItem[]>([]);
@@ -331,19 +437,25 @@ export default function DashboardPage() {
       if (aiData) setAiEngine(aiData);
 
       if (logsData && logsData.length > 0) {
-        setRecentLogs(
-          logsData.map((l: any) => ({
-            id: l.id,
-            time: l.time || new Date(l.created_at).toLocaleTimeString("vi-VN"),
-            initials: l.initials || l.user_name?.split(" ").map((n: string) => n[0]).slice(-2).join("") || "?",
-            name: l.user_name || "Unknown",
-            code: l.employee_id || "--",
-            checkpoint: l.door_name || l.camera_name || "Cửa chính",
-            confidence: l.confidence || 0,
-            status: l.result === "GRANTED" ? "GRANTED" : "DENIED",
-            color: l.result === "GRANTED" ? "#00D4AA" : "#EF4444",
-          }))
-        );
+        const seenLogIds = new Set<string>();
+        const uniqueLogs: any[] = [];
+        for (const l of logsData) {
+          if (l && l.id && !seenLogIds.has(l.id)) {
+            seenLogIds.add(l.id);
+            uniqueLogs.push({
+              id: l.id,
+              time: l.time || new Date(l.created_at).toLocaleTimeString("vi-VN"),
+              initials: getInitials(l.user_name),
+              name: l.user_name || "Người không xác định",
+              code: l.employee_id || "--",
+              checkpoint: l.door_name || l.camera_name || "Cửa chính",
+              confidence: l.confidence || 0,
+              status: l.result === "GRANTED" ? "GRANTED" : "DENIED",
+              color: l.result === "GRANTED" ? "#00D4AA" : "#EF4444",
+            });
+          }
+        }
+        setRecentLogs(uniqueLogs);
       }
 
       if (doorsData && doorsData.length > 0) {
@@ -354,13 +466,20 @@ export default function DashboardPage() {
       }
 
       if (camerasData && camerasData.length > 0) {
-        const mappedCams: CameraOption[] = camerasData.map((c: any) => ({
-          id: c.id,
-          name: c.name,
-          location: c.location || "Khu vực toà nhà",
-          rtsp: c.rtsp_url || c.ip_address || `RTSP: ${c.name}`,
-          isWebcam: false,
-        }));
+        const seenCamIds = new Set<string>();
+        const mappedCams: CameraOption[] = [];
+        for (const c of camerasData) {
+          if (c && c.id && !seenCamIds.has(c.id)) {
+            seenCamIds.add(c.id);
+            mappedCams.push({
+              id: c.id,
+              name: c.name,
+              location: c.location || "Khu vực toà nhà",
+              rtsp: c.rtsp_url || c.ip_address || `RTSP: ${c.name}`,
+              isWebcam: false,
+            });
+          }
+        }
         mappedCams.push({
           id: "cam-webcam",
           name: "📷 Webcam Máy Tính (Live Test)",
@@ -377,12 +496,28 @@ export default function DashboardPage() {
           : Array.isArray(alertsData.items)
           ? alertsData.items
           : [];
-        setAlerts(rawAlerts);
+        const seenAlertIds = new Set<string>();
+        const uniqueAlerts: any[] = [];
+        for (const a of rawAlerts) {
+          if (a && a.id && !seenAlertIds.has(a.id)) {
+            seenAlertIds.add(a.id);
+            uniqueAlerts.push(a);
+          }
+        }
+        setAlerts(uniqueAlerts);
+        if (typeof alertsData.unresolved_count === "number") {
+          setStats((prev: any) => ({
+            ...prev,
+            unresolved_alerts: alertsData.unresolved_count,
+          }));
+        }
       }
+
+      fetchAnalytics(dateRangeRef.current.start, dateRangeRef.current.end);
     } catch (err) {
       console.error("Dashboard failed to load from API:", err);
     }
-  }, []);
+  }, [fetchAnalytics]);
 
   useEffect(() => {
     fetchAllData();
@@ -400,7 +535,7 @@ export default function DashboardPage() {
           const newEntry: AccessLogItem = {
             id: d.log_id || String(Date.now()),
             time: d.time,
-            initials: d.user_name.split(" ").map((n: string) => n[0]).slice(-2).join("") || "?",
+            initials: getInitials(d.user_name),
             name: d.user_name,
             code: d.employee_id || "--",
             checkpoint: d.door_name || "Cửa chính",
@@ -409,7 +544,10 @@ export default function DashboardPage() {
             color: isGranted ? "#00D4AA" : "#EF4444",
           };
 
-          setRecentLogs((prev) => [newEntry, ...prev.slice(0, 4)]);
+          setRecentLogs((prev) => {
+            const filtered = prev.filter((p) => p.id !== newEntry.id);
+            return [newEntry, ...filtered.slice(0, 4)];
+          });
 
           // Update door state
           if (d.door_unlocked) {
@@ -424,15 +562,29 @@ export default function DashboardPage() {
             granted_count: isGranted ? (prev.granted_count || 0) + 1 : prev.granted_count,
             denied_count: !isGranted ? (prev.denied_count || 0) + 1 : prev.denied_count,
           }));
+
+          fetchAnalytics(dateRangeRef.current.start, dateRangeRef.current.end);
         } else if (event.type === "DOOR_UPDATE") {
           const unlocked = event.data.lock_status === "Unlocked";
           setIsLocked(!unlocked);
           if (unlocked) {
             setDoorTimer(event.data.duration || 10);
           }
+        } else if (event.type === "ALERT_NEW") {
+          const newAlert = event.data;
+          if (newAlert && newAlert.id) {
+            setAlerts((prev) => {
+              const filtered = prev.filter((a) => a.id !== newAlert.id);
+              return [newAlert, ...filtered.slice(0, 2)];
+            });
+            setStats((prev: any) => ({
+              ...prev,
+              unresolved_alerts: (prev.unresolved_alerts || 0) + 1,
+            }));
+          }
         }
       },
-      []
+      [fetchAnalytics]
     )
   );
 
@@ -740,6 +892,54 @@ export default function DashboardPage() {
       ),
     },
   ];
+
+  // ── Access Analytics Dynamic Math ──
+  const analyticsLabels =
+    analyticsData.labels && analyticsData.labels.length > 0
+      ? analyticsData.labels
+      : ["00:00", "03:00", "06:00", "08:00", "10:00", "13:00", "16:00", "19:00", "22:00"];
+  const numPoints = analyticsLabels.length;
+  const seriesG =
+    analyticsData.series_granted && analyticsData.series_granted.length === numPoints
+      ? analyticsData.series_granted
+      : new Array(numPoints).fill(0);
+  const seriesD =
+    analyticsData.series_denied && analyticsData.series_denied.length === numPoints
+      ? analyticsData.series_denied
+      : new Array(numPoints).fill(0);
+
+  const maxVal = Math.max(...seriesG, ...seriesD, 1);
+  const getY = (val: number) => {
+    const norm = val / (maxVal * 1.18);
+    const clamped = Math.max(0, Math.min(norm, 1));
+    return Math.round(145 - clamped * 115);
+  };
+  const getX = (idx: number) => {
+    if (numPoints <= 1) return 450;
+    return Math.round((idx / (numPoints - 1)) * 900);
+  };
+
+  const pointsG = seriesG.map((v, i) => ({ x: getX(i), y: getY(v) }));
+  const pointsD = seriesD.map((v, i) => ({ x: getX(i), y: getY(v) }));
+
+  const strokeG = pointsToSmoothPath(pointsG);
+  const fillG = `${strokeG} L 900 160 L 0 160 Z`;
+
+  const strokeD = pointsToSmoothPath(pointsD);
+  const fillD = `${strokeD} L 900 160 L 0 160 Z`;
+
+  let peakIdx = 0;
+  let peakTotal = 0;
+  for (let i = 0; i < numPoints; i++) {
+    const tot = (seriesG[i] || 0) + (seriesD[i] || 0);
+    if (tot > peakTotal) {
+      peakTotal = tot;
+      peakIdx = i;
+    }
+  }
+  const peakX = getX(peakIdx);
+  const peakY = pointsG[peakIdx]?.y ?? 30;
+  const peakLeftPercent = ((peakX / 900) * 100).toFixed(1);
 
   return (
     <div style={{ padding: "18px 24px 40px", minHeight: "100%", background: "#080C14", position: "relative" }}>
@@ -1639,43 +1839,91 @@ export default function DashboardPage() {
           <div style={{ display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
             <div>
               <span style={{ fontSize: 11, color: "#64748B" }}>Cao điểm: </span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#F8FAFC" }}>08:00 – 09:00</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#F8FAFC" }}>
+                {analyticsData.peak_label || "08:00 – 10:00"}
+              </span>
             </div>
             <div>
               <span style={{ fontSize: 11, color: "#64748B" }}>Tổng truy cập: </span>
               <span style={{ fontSize: 12, fontWeight: 700, color: "#F8FAFC" }}>
-                {(stats?.today_access_count ?? stats?.today_entries ?? 0).toLocaleString()}
+                {(analyticsData.total_access ?? stats?.today_access_count ?? stats?.today_entries ?? 0).toLocaleString()}
               </span>
             </div>
             <div>
               <span style={{ fontSize: 11, color: "#64748B" }}>Tỷ lệ thành công: </span>
               <span style={{ fontSize: 12, fontWeight: 700, color: "#22C55E" }}>
-                {Number(stats?.success_rate ?? stats?.recognition_rate ?? 0).toFixed(1)}%
+                {Number(analyticsData.success_rate ?? stats?.success_rate ?? stats?.recognition_rate ?? 0).toFixed(1)}%
               </span>
             </div>
           </div>
 
-          {/* Time range tabs */}
-          <div style={{ display: "flex", background: "rgba(255, 255, 255, 0.04)", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 8, padding: 2 }}>
-            {(["today", "7days", "30days"] as const).map((r) => (
-              <button
-                key={r}
-                onClick={() => setAnalyticsRange(r)}
+          {/* Date range filter: Từ ngày -> Đến ngày */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              background: "rgba(255, 255, 255, 0.03)",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              borderRadius: 8,
+              padding: "4px 10px",
+            }}
+          >
+            {/* Calendar icon */}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+              <line x1="16" y1="2" x2="16" y2="6" />
+              <line x1="8" y1="2" x2="8" y2="6" />
+              <line x1="3" y1="10" x2="21" y2="10" />
+            </svg>
+
+            {/* Từ ngày */}
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600 }}>Từ:</span>
+              <input
+                id="analytics-start-date"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
                 style={{
-                  padding: "5px 12px",
+                  background: "rgba(10, 18, 30, 0.85)",
+                  border: "1px solid rgba(56, 189, 248, 0.3)",
                   borderRadius: 6,
-                  border: "none",
+                  padding: "3px 7px",
+                  color: "#F8FAFC",
                   fontSize: 11,
-                  fontWeight: 600,
+                  fontFamily: "monospace",
+                  outline: "none",
+                  colorScheme: "dark",
                   cursor: "pointer",
-                  background: analyticsRange === r ? "linear-gradient(135deg, #0284C7 0%, #00D4AA 100%)" : "transparent",
-                  color: analyticsRange === r ? "#05131E" : "#94A3B8",
-                  transition: "all 0.15s ease",
                 }}
-              >
-                {r === "today" ? "Hôm nay" : r === "7days" ? "7 ngày" : "30 ngày"}
-              </button>
-            ))}
+              />
+            </div>
+
+            <span style={{ color: "#64748B", fontSize: 12 }}>→</span>
+
+            {/* Đến ngày */}
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ fontSize: 11, color: "#94A3B8", fontWeight: 600 }}>Đến:</span>
+              <input
+                id="analytics-end-date"
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                style={{
+                  background: "rgba(10, 18, 30, 0.85)",
+                  border: "1px solid rgba(0, 212, 170, 0.3)",
+                  borderRadius: 6,
+                  padding: "3px 7px",
+                  color: "#F8FAFC",
+                  fontSize: 11,
+                  fontFamily: "monospace",
+                  outline: "none",
+                  colorScheme: "dark",
+                  cursor: "pointer",
+                }}
+              />
+            </div>
           </div>
         </div>
 
@@ -1716,43 +1964,54 @@ export default function DashboardPage() {
 
             {/* Granted Area Fill */}
             <path
-              d="M 0 145 Q 100 135, 200 115 T 320 20 T 450 90 T 600 35 T 750 100 T 900 140 L 900 160 L 0 160 Z"
+              d={fillG}
               fill="url(#grantedGrad)"
+              style={{ transition: "all 0.5s ease" }}
             />
 
             {/* Granted Stroke Line */}
             <path
-              d="M 0 145 Q 100 135, 200 115 T 320 20 T 450 90 T 600 35 T 750 100 T 900 140"
+              d={strokeG}
               fill="none"
               stroke="#00D4AA"
               strokeWidth="2.5"
+              style={{ transition: "all 0.5s ease" }}
             />
 
             {/* Denied Area Fill */}
             <path
-              d="M 0 152 Q 120 148, 220 142 T 320 110 T 450 138 T 600 130 T 750 145 T 900 150 L 900 160 L 0 160 Z"
+              d={fillD}
               fill="url(#deniedGrad)"
+              style={{ transition: "all 0.5s ease" }}
             />
 
             {/* Denied Stroke Line */}
             <path
-              d="M 0 152 Q 120 148, 220 142 T 320 110 T 450 138 T 600 130 T 750 145 T 900 150"
+              d={strokeD}
               fill="none"
               stroke="#EF4444"
               strokeWidth="2"
+              style={{ transition: "all 0.5s ease" }}
             />
 
-            {/* Peak Dot & Marker on 08:30 (x=320, y=20) */}
-            <circle cx="320" cy="20" r="5" fill="#38BDF8" stroke="#080C14" strokeWidth="2" />
-            <circle cx="320" cy="20" r="9" fill="none" stroke="#38BDF8" strokeWidth="1.5" opacity="0.6" />
+            {/* Peak Dot & Pulsing Marker */}
+            {peakTotal > 0 && (
+              <g>
+                <circle cx={peakX} cy={peakY} r="5" fill="#38BDF8" stroke="#080C14" strokeWidth="2" />
+                <circle cx={peakX} cy={peakY} r="9" fill="none" stroke="#38BDF8" strokeWidth="1.5" opacity="0.6">
+                  <animate attributeName="r" values="7;13;7" dur="2.5s" repeatCount="indefinite" />
+                  <animate attributeName="opacity" values="0.8;0.2;0.8" dur="2.5s" repeatCount="indefinite" />
+                </circle>
+              </g>
+            )}
           </svg>
 
-          {/* Interactive Tooltip Pin positioned exactly over 08:30 Peak */}
+          {/* Interactive Tooltip Pin positioned dynamically over Peak Point */}
           <div
             style={{
               position: "absolute",
-              left: "35.5%",
-              top: 5,
+              left: `${Math.min(Math.max(Number(peakLeftPercent), 8), 92)}%`,
+              top: Math.max(peakY - 32, 5),
               transform: "translateX(-50%)",
               background: "rgba(10, 20, 36, 0.95)",
               border: "1px solid rgba(56, 189, 248, 0.5)",
@@ -1764,23 +2023,30 @@ export default function DashboardPage() {
               color: "#F8FAFC",
               whiteSpace: "nowrap",
               pointerEvents: "none",
+              transition: "all 0.3s ease",
             }}
           >
-            <span style={{ color: "#38BDF8" }}>08:30 Peak:</span> 246 lượt (95.1% Granted)
+            <span style={{ color: "#38BDF8" }}>{analyticsLabels[peakIdx]} Peak:</span>{" "}
+            {peakTotal} lượt ({peakTotal > 0 ? ((seriesG[peakIdx] / peakTotal) * 100).toFixed(1) : 0}% Granted)
           </div>
         </div>
 
         {/* X-Axis Timeline Labels */}
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: "#64748B", fontFamily: "monospace" }}>
-          <span>06:00</span>
-          <span style={{ color: "#38BDF8", fontWeight: 700 }}>08:00 (Peak)</span>
-          <span>10:00</span>
-          <span>12:00</span>
-          <span>14:00</span>
-          <span>16:00</span>
-          <span>18:00</span>
-          <span>20:00</span>
-          <span>22:00</span>
+          {analyticsLabels.map((lbl, idx) => {
+            const isPeak = idx === peakIdx && peakTotal > 0;
+            return (
+              <span
+                key={`axis-lbl-${lbl}-${idx}`}
+                style={{
+                  color: isPeak ? "#38BDF8" : "#64748B",
+                  fontWeight: isPeak ? 700 : 400,
+                }}
+              >
+                {lbl}{isPeak ? " (Peak)" : ""}
+              </span>
+            );
+          })}
         </div>
       </div>
 
@@ -1845,9 +2111,9 @@ export default function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {recentLogs.map((log) => (
+                {recentLogs.map((log, idx) => (
                   <tr
-                    key={log.id}
+                    key={`log-${log.id}-${idx}`}
                     style={{
                       borderBottom: "1px solid rgba(255, 255, 255, 0.04)",
                       transition: "background 0.15s ease",
@@ -1969,13 +2235,13 @@ export default function DashboardPage() {
                   ✓ Không có cảnh báo chưa xử lý trong hệ thống
                 </div>
               ) : (
-                alerts.map((al) => {
+                alerts.map((al, idx) => {
                   const isCrit = al.severity === "CRITICAL";
                   const isWarn = al.severity === "WARNING";
                   const color = isCrit ? "#EF4444" : isWarn ? "#F59E0B" : "#38BDF8";
                   return (
                     <div
-                      key={al.id}
+                      key={`alert-${al.id || idx}-${idx}`}
                       style={{
                         background: `${color}0D`,
                         border: `1px solid ${color}33`,
@@ -2001,6 +2267,11 @@ export default function DashboardPage() {
                       <button
                         onClick={async () => {
                           try {
+                            setAlerts((prev) => prev.filter((a) => a.id !== al.id));
+                            setStats((prev: any) => ({
+                              ...prev,
+                              unresolved_alerts: Math.max(0, (prev.unresolved_alerts || 1) - 1),
+                            }));
                             await api.alerts.resolve(al.id);
                             fetchAllData();
                           } catch (e) {
@@ -2097,167 +2368,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      {/* 6. THAO TÁC NHANH (QUICK ACTIONS) - Bottom Bar                      */}
-      {/* ─────────────────────────────────────────────────────────────────── */}
-      <div
-        style={{
-          background: "rgba(13, 20, 36, 0.65)",
-          border: "1px solid rgba(255, 255, 255, 0.08)",
-          borderRadius: 14,
-          padding: "14px 18px",
-          boxShadow: "0 10px 30px rgba(0, 0, 0, 0.3)",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#00D4AA" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-          </svg>
-          <h2 style={{ fontSize: 12.5, fontWeight: 800, color: "#F8FAFC", letterSpacing: "0.03em", margin: 0 }}>
-            THAO TÁC NHANH (QUICK ACTIONS)
-          </h2>
-        </div>
 
-        {/* 4 Action Buttons Grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
-          <Link
-            href="/users/enroll"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              padding: "9px 14px",
-              background: "rgba(255, 255, 255, 0.04)",
-              border: "1px solid rgba(255, 255, 255, 0.1)",
-              borderRadius: 8,
-              color: "#E2E8F0",
-              fontSize: 12,
-              fontWeight: 600,
-              textDecoration: "none",
-              transition: "all 0.15s ease",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "rgba(0, 212, 170, 0.12)";
-              (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(0, 212, 170, 0.35)";
-              (e.currentTarget as HTMLAnchorElement).style.color = "#00D4AA";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "rgba(255, 255, 255, 0.04)";
-              (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255, 255, 255, 0.1)";
-              (e.currentTarget as HTMLAnchorElement).style.color = "#E2E8F0";
-            }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="8.5" cy="7" r="4" /><line x1="20" y1="8" x2="20" y2="14" /><line x1="23" y1="11" x2="17" y2="11" />
-            </svg>
-            + Đăng ký khuôn mặt
-          </Link>
-
-          <Link
-            href="/users"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              padding: "9px 14px",
-              background: "rgba(255, 255, 255, 0.04)",
-              border: "1px solid rgba(255, 255, 255, 0.1)",
-              borderRadius: 8,
-              color: "#E2E8F0",
-              fontSize: 12,
-              fontWeight: 600,
-              textDecoration: "none",
-              transition: "all 0.15s ease",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "rgba(56, 189, 248, 0.12)";
-              (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(56, 189, 248, 0.35)";
-              (e.currentTarget as HTMLAnchorElement).style.color = "#38BDF8";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "rgba(255, 255, 255, 0.04)";
-              (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255, 255, 255, 0.1)";
-              (e.currentTarget as HTMLAnchorElement).style.color = "#E2E8F0";
-            }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" />
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" />
-            </svg>
-            Quản lý người dùng
-          </Link>
-
-          <Link
-            href="/cameras"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              padding: "9px 14px",
-              background: "rgba(255, 255, 255, 0.04)",
-              border: "1px solid rgba(255, 255, 255, 0.1)",
-              borderRadius: 8,
-              color: "#E2E8F0",
-              fontSize: 12,
-              fontWeight: 600,
-              textDecoration: "none",
-              transition: "all 0.15s ease",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "rgba(0, 212, 170, 0.12)";
-              (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(0, 212, 170, 0.35)";
-              (e.currentTarget as HTMLAnchorElement).style.color = "#00D4AA";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "rgba(255, 255, 255, 0.04)";
-              (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255, 255, 255, 0.1)";
-              (e.currentTarget as HTMLAnchorElement).style.color = "#E2E8F0";
-            }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="2" y="7" width="15" height="10" rx="2" /><polyline points="17 11 21 7 21 17 17 13" />
-            </svg>
-            Quản lý camera
-          </Link>
-
-          <Link
-            href="/doors"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 8,
-              padding: "9px 14px",
-              background: "rgba(255, 255, 255, 0.04)",
-              border: "1px solid rgba(255, 255, 255, 0.1)",
-              borderRadius: 8,
-              color: "#E2E8F0",
-              fontSize: 12,
-              fontWeight: 600,
-              textDecoration: "none",
-              transition: "all 0.15s ease",
-            }}
-            onMouseEnter={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "rgba(56, 189, 248, 0.12)";
-              (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(56, 189, 248, 0.35)";
-              (e.currentTarget as HTMLAnchorElement).style.color = "#38BDF8";
-            }}
-            onMouseLeave={(e) => {
-              (e.currentTarget as HTMLAnchorElement).style.background = "rgba(255, 255, 255, 0.04)";
-              (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255, 255, 255, 0.1)";
-              (e.currentTarget as HTMLAnchorElement).style.color = "#E2E8F0";
-            }}
-          >
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 3h6v18H3z" /><path d="M9 3h6l3 3v12l-3 3H9" /><circle cx="16" cy="12" r="1" fill="currentColor" />
-            </svg>
-            Quản lý cửa / Cấu hình
-          </Link>
-        </div>
-      </div>
 
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* 7. Real-time Toast Event Notification (Bottom Right)                */}
