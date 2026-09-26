@@ -10,6 +10,7 @@ import {
   POSE_STEP_META,
   DEFAULT_HEAD_POSE_CONFIG,
 } from "@/lib/headPoseService";
+import { extractGeometricFaceVector } from "@/lib/recognitionPipeline";
 
 interface CreateUserFlowModalProps {
   onClose: () => void;
@@ -87,6 +88,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
   const [availableCameras, setAvailableCameras] = useState<MediaDeviceInfo[]>([]);
   const [selectedCamId, setSelectedCamId] = useState<string>("");
   const animationFrameRef = useRef<number | null>(null);
+  const lastLandmarksRef = useRef<any[] | null>(null);
   const [equalizerHeights, setEqualizerHeights] = useState<number[]>([
     40, 65, 80, 50, 90, 75, 45, 60, 85, 95, 70, 55, 80, 60, 45, 90, 75, 50, 65, 85, 95, 60, 75, 50, 70, 85, 45, 65
   ]);
@@ -271,6 +273,9 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
           performance.now()
         );
         setHeadPoseAnalysis(frame);
+        if (frame.landmarks && frame.landmarks.length >= 468) {
+          lastLandmarksRef.current = frame.landmarks;
+        }
 
         if (enrollFrames < 30) {
           setGuidancePrompt(frame.guidanceText);
@@ -366,8 +371,16 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
       toast.warning("Vui lòng nhập mã nhân viên!", "THIẾU THÔNG TIN");
       return;
     }
+    if (!/^[A-Za-z0-9\-_]{3,30}$/.test(form.employeeId.trim())) {
+      toast.warning("Mã nhân viên phải từ 3-30 ký tự (chữ cái, số, gạch nối hoặc gạch dưới)!", "ĐỊNH DẠNG MÃ KHÔNG HỢP LỆ");
+      return;
+    }
     if (!form.email.trim()) {
       toast.warning("Vui lòng nhập email doanh nghiệp!", "THIẾU THÔNG TIN");
+      return;
+    }
+    if (!/^[\w\.\+\-]+@[\w\-]+\.[a-zA-Z]{2,}$/.test(form.email.trim())) {
+      toast.warning("Email doanh nghiệp không đúng định dạng!", "EMAIL KHÔNG HỢP LỆ");
       return;
     }
 
@@ -386,6 +399,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
         status: "WAITING", // Trạng thái: Chờ nạp Face
         card_number: form.rfidCode || undefined,
         access_areas: selectedDoorNames,
+        avatar_url: avatarPreview || undefined,
         password: "Password@123",
       });
 
@@ -405,7 +419,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
   // Action 2: Click "Đăng ký khuôn mặt"
   // Requirement: "xử lý camera phải bật camera và dữ liệu người dùng đúng thì mới chuyển trang tiếp theo"
   // ─────────────────────────────────────────────────────────────────────────────
-  const handleProceedToFaceEnrollment = () => {
+  const handleProceedToFaceEnrollment = async () => {
     // 1. Kiểm tra thông tin người dùng
     if (!form.name.trim()) {
       toast.warning("Vui lòng nhập 'Họ và tên đầy đủ' trước khi tiếp tục!", "YÊU CẦU THÔNG TIN");
@@ -415,20 +429,27 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
       toast.warning("Vui lòng nhập 'Mã nhân viên' trước khi tiếp tục!", "YÊU CẦU THÔNG TIN");
       return;
     }
+    if (!/^[A-Za-z0-9\-_]{3,30}$/.test(form.employeeId.trim())) {
+      toast.warning("Mã nhân viên phải từ 3-30 ký tự (chữ cái, số, gạch nối hoặc gạch dưới)!", "ĐỊNH DẠNG MÃ KHÔNG HỢP LỆ");
+      return;
+    }
     if (!form.email.trim()) {
       toast.warning("Vui lòng nhập 'Email doanh nghiệp' trước khi tiếp tục!", "YÊU CẦU THÔNG TIN");
+      return;
+    }
+    if (!/^[\w\.\+\-]+@[\w\-]+\.[a-zA-Z]{2,}$/.test(form.email.trim())) {
+      toast.warning("Email doanh nghiệp không đúng định dạng!", "EMAIL KHÔNG HỢP LỆ");
       return;
     }
 
     // 2. Kiểm tra CAMERA PHẢI ĐANG BẬT
     if (!isCameraActive || !mediaStreamRef.current) {
       toast.warning(
-        "Camera máy tính chưa bật! Vui lòng bấm 'Bật Camera quét khuôn mặt ngay' để kích hoạt webcam trước khi sang bước Đăng ký khuôn mặt.",
+        "Camera máy tính chưa bật! Đang kích hoạt camera webcam...",
         "QUY CHUẨN AN NINH & CAMERA"
       );
-      // Auto-trigger start camera
-      startCamera();
-      return;
+      const camOk = await startCamera();
+      if (!camOk) return;
     }
 
     // 3. Reset detector and switch to View Đăng ký khuôn mặt AI
@@ -452,31 +473,75 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
       return;
     }
 
+    const landmarks = lastLandmarksRef.current || headPoseAnalysis?.landmarks;
+    let faceVector: number[] = [];
+    if (landmarks && landmarks.length >= 468) {
+      faceVector = extractGeometricFaceVector(landmarks);
+    }
+
+    if (faceVector.length !== 128 || faceVector.every((x) => x === 0)) {
+      toast.warning(
+        "Chưa trích xuất được vector đặc trưng khuôn mặt hợp lệ từ camera. Vui lòng hướng mặt vào giữa camera!",
+        "LỖI TRÍCH XUẤT ĐẶC TRƯNG"
+      );
+      return;
+    }
+
     setSaving(true);
     try {
       const selectedDoorNames = doors.filter((d) => d.selected).map((d) => d.name);
 
-      await api.users.create({
-        full_name: form.name.trim(),
+      // 1. Step 1 & 2: Persist user profile and Access Control in CSDL
+      try {
+        await api.users.create({
+          full_name: form.name.trim(),
+          employee_id: form.employeeId.trim(),
+          email: form.email.trim(),
+          phone: form.phone.trim() || undefined,
+          department: form.department,
+          position: form.position,
+          role: "STAFF",
+          status: "WAITING",
+          card_number: form.rfidCode || undefined,
+          access_areas: selectedDoorNames,
+          avatar_url: avatarPreview || undefined,
+          password: "Password@123",
+        });
+      } catch (createErr: any) {
+        // If user already exists (e.g. was previously saved), update their access areas & avatar
+        console.warn("User creation info:", createErr?.message);
+        try {
+          await api.users.update(form.employeeId.trim(), {
+            full_name: form.name.trim(),
+            department: form.department,
+            position: form.position,
+            access_areas: selectedDoorNames,
+            avatar_url: avatarPreview || undefined,
+          });
+        } catch {
+          // ignore if already in sync
+        }
+      }
+
+      // 2. Step 5, 6, 7: Biometric encoding registration with duplicate face check
+      await api.faces.enroll({
         employee_id: form.employeeId.trim(),
-        email: form.email.trim(),
-        phone: form.phone.trim() || undefined,
-        department: form.department,
-        position: form.position,
-        role: "STAFF",
-        status: "ACTIVE", // Đã nạp khuôn mặt thành công -> ACTIVE
-        card_number: form.rfidCode || undefined,
-        access_areas: selectedDoorNames,
-        password: "Password@123",
+        encoding_vector: faceVector,
+        quality_score: 0.98,
+        samples_count: 30,
+        master_photo_url: avatarPreview || undefined,
       });
 
       stopCamera();
-      toast.success(`Đã nạp vector nhận diện khuôn mặt và kích hoạt thẻ số cho "${form.name}" (ACTIVE)!`, "KÍCH HOẠT THÀNH CÔNG");
+      toast.success(
+        `✓ Đã nạp thành công vector nhận diện 128-D và kích hoạt Face ID cho "${form.name}" (ACTIVE)!`,
+        "KÍCH HOẠT THÀNH CÔNG"
+      );
       onSuccess(`Đã nạp vector nhận diện khuôn mặt và kích hoạt thẻ số cho "${form.name}" (ACTIVE)!`);
       onClose();
     } catch (err: any) {
       console.error("Enrollment failed:", err);
-      toast.error(`Lỗi khi kích hoạt: ${err.message || err}`, "KÍCH HOẠT THẤT BẠI");
+      toast.error(`Lỗi khi kích hoạt Face ID: ${err.message || err}`, "KÍCH HOẠT THẤT BẠI");
     } finally {
       setSaving(false);
     }

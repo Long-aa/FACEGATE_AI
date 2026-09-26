@@ -149,9 +149,18 @@ async def verify_recognition(
     # 1. Resolve Door and Camera
     door = None
     if payload.door_id:
-        door = db.query(Door).filter((Door.id == payload.door_id) | (Door.door_code == payload.door_id)).first()
+        door = db.query(Door).filter(
+            (Door.id == payload.door_id) | 
+            (Door.door_code == payload.door_id) |
+            (Door.name == payload.door_id) |
+            (Door.name.ilike(f"%{payload.door_id}%"))
+        ).first()
     if not door:
-        door = db.query(Door).first()
+        door = (
+            db.query(Door).filter(Door.name.ilike("%Cửa chính%")).first() or
+            db.query(Door).filter(Door.door_type == "entrance").first() or
+            db.query(Door).first()
+        )
 
     camera = None
     if payload.camera_id:
@@ -241,13 +250,15 @@ async def verify_recognition(
             best_similarity = (payload.simulated_confidence / 100.0) if payload.simulated_confidence else 0.968
 
     # Calculate final confidence percentage
-    if user:
+    if payload.simulated_confidence is not None:
+        confidence = float(payload.simulated_confidence)
+    elif user:
         confidence = round(best_similarity * 100.0, 1)
         if confidence < 50.0:
             confidence = 96.5  # Realistic high match confidence for matched active user
     else:
         # Unknown Person
-        confidence = round((payload.simulated_confidence or random.uniform(38.0, 48.0)), 1)
+        confidence = round(random.uniform(38.0, 48.0), 1)
         if confidence >= threshold_val * 100:
             confidence = round(threshold_val * 100 - 5.5, 1)
 
@@ -342,6 +353,29 @@ async def verify_recognition(
         emp_id = user.employee_id
         door_unlocked = False
         message = f"Nhận diện {user.full_name}, đang tích lũy xác thực liên tục ({payload.multi_frame_count}/3 frames). Cửa tiếp tục khóa."
+
+    elif (55.0 <= confidence < 75.0) or (0.50 <= liveness_score < 0.65):
+        # Step 9: MANUAL_VERIFY status when biometric confidence or liveness is borderline
+        result = "MANUAL_VERIFY"
+        user_name = user.full_name
+        dept = user.department
+        emp_id = user.employee_id
+        door_unlocked = False
+        message = f"Cần xác minh thủ công: Độ tin cậy nhận diện ({confidence}%) hoặc sinh trắc cận ngưỡng. Cửa khóa an toàn chờ đối soát."
+
+        alert = Alert(
+            alert_type="Cần xác minh thủ công (Manual Verify)",
+            description=f"Nhân viên {user.employee_id} - {user.full_name} ({user.department}) có độ tin cậy cận ngưỡng ({confidence}%). Cửa {door.name} khóa an toàn.",
+            location=door.location,
+            camera_id=camera.id if camera else None,
+            camera_name=camera.name if camera else None,
+            door_id=door.id,
+            door_name=door.name,
+            severity="INFO",
+            status="UNRESOLVED",
+            timestamp=now,
+        )
+        db.add(alert)
 
     else:
         # User is active, liveness passed, and frames confirmed -> Check Door Access Rules

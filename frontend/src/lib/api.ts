@@ -333,6 +333,8 @@ export const api = {
 
   // ── 9b. Face Profiles ─────────────────────────────────────────
   faces: {
+    preCheck: (employeeId: string) =>
+      request<any>(`/api/v1/faces/pre-check/${employeeId}`),
     list: (status?: string) =>
       request<any[]>(`/api/v1/faces${status ? `?status=${status}` : ""}`),
     get: (employeeId: string) =>

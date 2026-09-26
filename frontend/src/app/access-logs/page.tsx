@@ -25,7 +25,7 @@ interface AuditLogRecord {
   doorName: string;
   cameraResolution?: string;
   confidence: number;
-  result: "GRANTED" | "DENIED" | "LOW CONF" | "UNKNOWN";
+  result: "GRANTED" | "DENIED" | "LOW CONF" | "UNKNOWN" | "MANUAL_VERIFY";
   livePhoto?: string;
   masterPhoto?: string;
   initials?: string;
@@ -360,12 +360,40 @@ export default function AccessLogsPage() {
       if (Array.isArray(cams)) setCameraOptions(cams);
       if (Array.isArray(drs)) setDoorOptions(drs);
 
+      // Calculate date filters based on timeFilter
+      let date_from: string | undefined = undefined;
+      let date_to: string | undefined = undefined;
+      const now = new Date();
+
+      if (timeFilter === "Hôm nay") {
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+        date_from = start.toISOString();
+        date_to = end.toISOString();
+      } else if (timeFilter === "Hôm qua") {
+        const yest = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const start = new Date(yest.getFullYear(), yest.getMonth(), yest.getDate(), 0, 0, 0);
+        const end = new Date(yest.getFullYear(), yest.getMonth(), yest.getDate(), 23, 59, 59);
+        date_from = start.toISOString();
+        date_to = end.toISOString();
+      } else if (timeFilter === "7 ngày qua") {
+        const start = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        date_from = start.toISOString();
+        date_to = now.toISOString();
+      } else if (timeFilter === "30 ngày qua") {
+        const start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        date_from = start.toISOString();
+        date_to = now.toISOString();
+      }
+
       // 3. Fetch logs from DB
       const res = await api.accessLogs.list({
         search: searchQuery.trim() || undefined,
         result: resultFilter !== "all" ? resultFilter : undefined,
         camera_id: camFilter !== "all" ? camFilter : undefined,
         door_id: doorFilter !== "all" ? doorFilter : undefined,
+        date_from,
+        date_to,
         page: currentPage,
         limit: pageSize,
       });
@@ -374,6 +402,7 @@ export default function AccessLogsPage() {
         const mapped: AuditLogRecord[] = res.items.map((item: any, idx: number) => {
           const resUpper = (item.result || "").toUpperCase();
           const isGranted = resUpper === "GRANTED";
+          const isManualVerify = resUpper === "MANUAL_VERIFY";
           const isUnknown = item.is_unknown || resUpper === "UNKNOWN" || !item.user_id || (item.user_name && item.user_name.includes("Người lạ"));
           const conf = item.confidence != null ? Number(item.confidence) : (isGranted ? 96.8 : 41.3);
           const timePart = item.time || (item.timestamp ? item.timestamp.split("T")[1]?.slice(0, 8) : "00:00:00");
@@ -395,10 +424,14 @@ export default function AccessLogsPage() {
             doorName: item.door_name || "Cửa chính",
             cameraResolution: "CAM (1080p @ 30fps)",
             confidence: conf,
-            result: isGranted ? "GRANTED" : isUnknown ? "UNKNOWN" : (resUpper === "LOW CONF" ? "LOW CONF" : "DENIED"),
+            result: isGranted ? "GRANTED" : isManualVerify ? "MANUAL_VERIFY" : isUnknown ? "UNKNOWN" : (resUpper === "LOW CONF" ? "LOW CONF" : "DENIED"),
             livePhoto: item.live_photo_url || item.snapshot_url || "",
             initials: isUnknown ? "?" : name.split(" ").map((n: string) => n[0]).slice(-2).join(""),
-            initialsBg: isGranted ? "linear-gradient(135deg, #00D4AA, #0284C7)" : "linear-gradient(135deg, #EF4444, #991B1B)",
+            initialsBg: isGranted
+              ? "linear-gradient(135deg, #00D4AA, #0284C7)"
+              : isManualVerify
+              ? "linear-gradient(135deg, #38BDF8, #6366F1)"
+              : "linear-gradient(135deg, #EF4444, #991B1B)",
             cosineScore: item.cosine_score != null ? Number(item.cosine_score) : Number((conf / 100).toFixed(3)),
             faceDistance: item.face_distance != null ? Number(item.face_distance) : Number(((100 - conf) / 100 * 0.5).toFixed(2)),
             livenessPassed: item.liveness_passed !== false,
@@ -410,7 +443,7 @@ export default function AccessLogsPage() {
               { time: `${timePart}.100`, text: "Phát hiện khuôn mặt (OpenCV HOG)", status: "info" },
               { time: `${timePart}.128`, text: "Trích xuất 68 landmarks & 512-D vector", status: "info" },
               { time: `${timePart}.148`, text: `Khớp CSDL: ${name} [Độ tin cậy: ${conf}%]`, status: isGranted ? "success" : "warn" },
-              { time: `${timePart}.165`, text: `Quyết định: ${isGranted ? "ACCESS GRANTED" : "ACCESS DENIED"}`, status: isGranted ? "success" : "error" },
+              { time: `${timePart}.165`, text: `Quyết định: ${isGranted ? "ACCESS GRANTED" : isManualVerify ? "MANUAL VERIFY" : "ACCESS DENIED"}`, status: isGranted ? "success" : "error" },
             ],
             isUnknown,
             isMasked: item.is_masked,
@@ -429,7 +462,7 @@ export default function AccessLogsPage() {
     } catch (err) {
       console.error("Error loading access logs from DB:", err);
     }
-  }, [searchQuery, resultFilter, camFilter, doorFilter, currentPage, pageSize, selectedLogId]);
+  }, [searchQuery, resultFilter, camFilter, doorFilter, timeFilter, currentPage, pageSize, selectedLogId]);
 
   useEffect(() => {
     loadData();
@@ -1297,9 +1330,13 @@ export default function AccessLogsPage() {
               <button
                 onClick={() => {
                   setSearchQuery("");
+                  setTimeFilter("Hôm nay");
+                  setUserFilter("all");
                   setResultFilter("all");
                   setCamFilter("all");
+                  setDoorFilter("all");
                   setConfFilter("all");
+                  setCurrentPage(1);
                 }}
                 title="Đặt lại bộ lọc"
                 style={{
@@ -1487,6 +1524,7 @@ export default function AccessLogsPage() {
                   <option value="all">Tất cả kết quả</option>
                   <option value="GRANTED">Granted (Hợp lệ)</option>
                   <option value="DENIED">Denied (Từ chối)</option>
+                  <option value="MANUAL_VERIFY">Manual Verify (Xác minh thủ công)</option>
                   <option value="LOW_CONF">Low Confidence</option>
                   <option value="UNKNOWN">Unknown Person</option>
                 </select>
@@ -1856,6 +1894,24 @@ export default function AccessLogsPage() {
                                 }}
                               >
                                 ⚠ LOW CONF
+                              </span>
+                            )}
+                            {log.result === "MANUAL_VERIFY" && (
+                              <span
+                                style={{
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 5,
+                                  fontSize: 11,
+                                  fontWeight: 700,
+                                  color: "#38BDF8",
+                                  background: "rgba(56, 189, 248, 0.12)",
+                                  border: "1px solid rgba(56, 189, 248, 0.25)",
+                                  padding: "3px 9px",
+                                  borderRadius: 14,
+                                }}
+                              >
+                                🔍 MANUAL VERIFY
                               </span>
                             )}
                             {log.result === "UNKNOWN" && (

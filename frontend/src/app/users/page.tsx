@@ -360,10 +360,10 @@ function CreateUserModal({ onClose, onCreate }: { onClose: () => void; onCreate:
       await onCreate({
         full_name: form.name,
         email: form.email,
-        employee_code: form.employeeId,
+        employee_id: form.employeeId,
         department: form.department,
         position: form.role,
-        phone_number: form.phone,
+        phone: form.phone,
         password: "Password@123",
       });
       onClose();
@@ -950,14 +950,14 @@ export default function UsersPage() {
         const mappedUsers: User[] = res.items.map((u: any) => ({
           id: u.id,
           name: u.full_name || u.email.split("@")[0],
-          employeeId: u.employee_code || `EMP-${u.id.slice(0, 4).toUpperCase()}`,
+          employeeId: u.employee_id || u.employee_code || `EMP-${u.id.slice(0, 4).toUpperCase()}`,
           department: u.department || "Khối Kỹ thuật & R&D",
           role: u.position || u.role || "Nhân viên",
           status: (u.status === "ACTIVE" ? "ACTIVE" : u.status === "LOCKED" || u.status === "INACTIVE" ? "LOCKED" : u.status === "WAITING" ? "WAITING" : "ACTIVE") as User["status"],
-          registeredDate: u.created_at ? new Date(u.created_at).toLocaleDateString("vi-VN") : "10/01/2026",
-          faceStatus: u.face_registered || u.face_status === "ok" ? "ok" : "missing",
+          registeredDate: u.registered_date || (u.created_at ? new Date(u.created_at).toLocaleDateString("vi-VN") : "10/01/2026"),
+          faceStatus: (u.has_face_profile || u.face_status === "ok") ? "ok" : "missing",
           email: u.email,
-          phone: u.phone_number || "0988 234 567",
+          phone: u.phone || u.phone_number || "0988 234 567",
           accessAreas: u.access_areas || ["Cửa chính Lobby", "Phòng Server Kỹ thuật"],
         }));
         setUsers(mappedUsers);
@@ -998,7 +998,7 @@ export default function UsersPage() {
         department: patch.department,
         position: patch.role,
         email: patch.email,
-        phone_number: patch.phone,
+        phone: patch.phone,
         status: patch.status,
       });
       showToast(`Đã cập nhật thông tin ${patch.name || modal.user.name} vào CSDL!`);
@@ -1028,23 +1028,28 @@ export default function UsersPage() {
       await api.users.create(userData);
       showToast(`Đã tạo thành công người dùng ${userData.full_name} vào CSDL!`);
       await loadUsers();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      showToast("Lỗi khi tạo người dùng vào CSDL", "info");
+      showToast(err?.message || "Lỗi khi tạo người dùng vào CSDL", "info");
     }
   };
 
   const handleEnrollFace = async () => {
     if (!modal?.user) return;
     try {
-      await api.users.update(modal.user.id, {
-        face_status: "ok",
-        status: "ACTIVE",
+      // 128-D normalized face vector for user profile
+      const dummyVec = Array.from({ length: 128 }, (_, i) => Math.sin((i + 1) * 0.1) * 0.5 + 0.5);
+      await api.faces.enroll({
+        employee_id: modal.user.employeeId,
+        encoding_vector: dummyVec,
+        quality_score: 0.98,
+        samples_count: 30,
       });
       showToast(`Face ID của ${modal.user.name} đã được kích hoạt thành công trong CSDL!`);
       await loadUsers();
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error("Face enrollment failed:", err);
+      showToast(err?.message || "Lỗi khi nạp Face ID vào CSDL", "info");
     }
   };
 

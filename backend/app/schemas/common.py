@@ -43,17 +43,18 @@ class UserProfileResponse(BaseModel):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class UserCreate(BaseModel):
-    employee_id: str = Field(..., min_length=2, max_length=50)
+    employee_id: Optional[str] = Field(None, max_length=50)
     full_name: str = Field(..., min_length=2, max_length=255)
     email: Optional[str] = None
     phone: Optional[str] = None
     department: Optional[str] = None
     position: Optional[str] = None
     role: str = "STAFF"
-    status: str = "ACTIVE"
+    status: str = "WAITING"
     password: Optional[str] = None
     card_number: Optional[str] = None
     access_areas: Optional[List[str]] = None
+    avatar_url: Optional[str] = None
 
 
 class UserUpdate(BaseModel):
@@ -66,6 +67,8 @@ class UserUpdate(BaseModel):
     status: Optional[str] = None
     password: Optional[str] = None
     card_number: Optional[str] = None
+    access_areas: Optional[List[str]] = None
+    avatar_url: Optional[str] = None
 
 
 class UserStatusUpdate(BaseModel):
@@ -83,6 +86,8 @@ class UserOut(BaseModel):
     role: str
     status: str
     card_number: Optional[str]
+    avatar_url: Optional[str] = None
+    access_areas: Optional[List[str]] = None
     has_face_profile: bool = False
     face_status: str = "missing"
     registered_date: Optional[str] = None

@@ -4,6 +4,7 @@ Provides full CRUD, searching, filtering, status toggling, and access history di
 """
 from datetime import datetime, timezone
 import math
+import re
 from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
@@ -14,6 +15,7 @@ from app.database.session import get_db
 from app.models.access_log import AccessLog
 from app.models.access_rule import AccessRule
 from app.models.audit import AuditLog
+from app.models.door import Door
 from app.models.face import FaceProfile
 from app.models.user import Role, User
 from app.websocket.manager import ws_manager
@@ -32,6 +34,9 @@ router = APIRouter()
 def _to_user_out(user: User) -> UserOut:
     has_face = bool(user.face_profile and user.face_profile.status == "ACTIVE")
     reg_date = user.created_at.strftime("%d/%m/%Y") if user.created_at else ""
+    access_areas = []
+    if user.access_rules:
+        access_areas = [r.door.name for r in user.access_rules if r.door and r.is_active]
     return UserOut(
         id=user.id,
         employee_id=user.employee_id,
@@ -43,6 +48,8 @@ def _to_user_out(user: User) -> UserOut:
         role=user.role,
         status=user.status,
         card_number=user.card_number,
+        avatar_url=user.avatar_url,
+        access_areas=access_areas,
         has_face_profile=has_face,
         face_status="ok" if has_face else "missing",
         registered_date=reg_date,
@@ -107,49 +114,114 @@ def list_users(
 
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
-def create_user(
+async def create_user(
     payload: UserCreate,
     current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    Create a new user/employee in the database.
+    Create a new user/employee in the database following E2E Step 1 & Step 2.
     """
-    # Check duplicate employee_id
-    if db.query(User).filter(User.employee_id == payload.employee_id).first():
+    # 1. Validate full_name
+    if not payload.full_name or len(payload.full_name.strip()) < 2:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Mã nhân viên '{payload.employee_id}' đã tồn tại trong hệ thống.",
+            detail="Họ và tên người dùng phải có ít nhất 2 ký tự.",
         )
 
-    # Check duplicate email
-    if payload.email and db.query(User).filter(User.email == payload.email).first():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Email '{payload.email}' đã được sử dụng.",
-        )
+    # 2. Check / Generate employee_id according to rules
+    employee_id = payload.employee_id.strip() if payload.employee_id else None
+    if not employee_id:
+        # Auto generate EMP-XXXX with no collision
+        max_num = 1000
+        existing_emp_ids = db.query(User.employee_id).filter(User.employee_id.like("EMP-%")).all()
+        for (eid,) in existing_emp_ids:
+            m = re.match(r"^EMP-(\d+)$", eid)
+            if m:
+                num = int(m.group(1))
+                if num > max_num:
+                    max_num = num
+        employee_id = f"EMP-{max_num + 1:04d}"
+    else:
+        # Validate format
+        if not re.match(r"^[A-Za-z0-9\-_]{3,30}$", employee_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Mã nhân viên '{employee_id}' không đúng định dạng quy chuẩn (3-30 ký tự gồm chữ cái, số, gạch nối hoặc gạch dưới).",
+            )
+        # Check duplicate employee_id
+        if db.query(User).filter(User.employee_id == employee_id).first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Mã nhân viên '{employee_id}' đã tồn tại trong hệ thống.",
+            )
+
+    # 3. Check / Validate email
+    email = payload.email.strip() if payload.email else None
+    if email:
+        email_pattern = r"^[\w\.\+\-]+@[\w\-]+\.[a-zA-Z]{2,}$"
+        if not re.match(email_pattern, email):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Email '{email}' không đúng định dạng.",
+            )
+        if db.query(User).filter(User.email == email).first():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Email '{email}' đã được sử dụng bởi người dùng khác.",
+            )
+
+    # 4. Check phone if provided
+    phone = payload.phone.strip() if payload.phone else None
+    if phone:
+        if not re.match(r"^\+?[0-9\s\.\-]{8,20}$", phone):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Số điện thoại '{phone}' không hợp lệ.",
+            )
 
     hashed_pw = get_password_hash(payload.password) if payload.password else get_password_hash("Password@123")
 
+    # Ready for Face ID -> default WAITING if not specified
+    user_status = payload.status if payload.status in ("ACTIVE", "WAITING", "DRAFT", "LOCKED") else "WAITING"
+
     user = User(
-        employee_id=payload.employee_id,
-        full_name=payload.full_name,
-        email=payload.email,
-        phone=payload.phone,
-        department=payload.department,
-        position=payload.position,
-        role=payload.role,
-        status=payload.status,
+        employee_id=employee_id,
+        full_name=payload.full_name.strip(),
+        email=email,
+        phone=phone,
+        department=payload.department.strip() if payload.department else "Khối Kỹ thuật & R&D",
+        position=payload.position.strip() if payload.position else "Nhân viên",
+        role=payload.role or "STAFF",
+        status=user_status,
         card_number=payload.card_number,
+        avatar_url=payload.avatar_url,
         hashed_password=hashed_pw,
     )
 
-    role_record = db.query(Role).filter(Role.code == payload.role).first()
+    role_record = db.query(Role).filter(Role.code == (payload.role or "STAFF")).first()
     if role_record:
         user.roles.append(role_record)
 
     db.add(user)
     db.flush()
+
+    # Step 2: Access Control Mapping - create AccessRule for each assigned door
+    if payload.access_areas and len(payload.access_areas) > 0:
+        all_doors = db.query(Door).all()
+        for area_name in payload.access_areas:
+            matched_door = next((d for d in all_doors if d.name == area_name or d.id == area_name or d.door_code == area_name), None)
+            if matched_door:
+                rule = AccessRule(
+                    name=f"Quyền {matched_door.name} - {user.full_name}",
+                    user_id=user.id,
+                    door_id=matched_door.id,
+                    start_time="00:00:00",
+                    end_time="23:59:59",
+                    allowed_days=[1, 2, 3, 4, 5, 6, 7],
+                    is_active=True,
+                )
+                db.add(rule)
 
     audit = AuditLog(
         action="USER_CREATE",
@@ -157,11 +229,31 @@ def create_user(
         user_name=current_user.full_name,
         entity_type="user",
         entity_id=user.id,
-        details={"employee_id": user.employee_id, "name": user.full_name},
+        details={
+            "employee_id": user.employee_id,
+            "name": user.full_name,
+            "status": user.status,
+            "has_avatar": bool(user.avatar_url),
+            "access_areas": payload.access_areas or [],
+        },
     )
     db.add(audit)
     db.commit()
     db.refresh(user)
+
+    # Real-time WebSocket Broadcast
+    try:
+        await ws_manager.broadcast({
+            "type": "USER_CREATED",
+            "data": {
+                "id": user.id,
+                "employee_id": user.employee_id,
+                "full_name": user.full_name,
+                "status": user.status,
+            }
+        })
+    except Exception:
+        pass
 
     return _to_user_out(user)
 
@@ -184,14 +276,14 @@ def get_user_detail(
 
 
 @router.put("/{user_id}", response_model=UserOut)
-def update_user(
+async def update_user(
     user_id: str,
     payload: UserUpdate,
     current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    Update user information.
+    Update user information, access areas, and avatar.
     """
     user = db.query(User).filter((User.id == user_id) | (User.employee_id == user_id)).first()
     if not user:
@@ -201,11 +293,19 @@ def update_user(
         )
 
     if payload.full_name is not None:
-        user.full_name = payload.full_name
+        user.full_name = payload.full_name.strip()
     if payload.email is not None:
-        user.email = payload.email
+        email = payload.email.strip() if payload.email else None
+        if email:
+            email_pattern = r"^[\w\.\+\-]+@[\w\-]+\.[a-zA-Z]{2,}$"
+            if not re.match(email_pattern, email):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Email '{email}' không đúng định dạng.")
+            dup = db.query(User).filter(User.email == email, User.id != user.id).first()
+            if dup:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Email '{email}' đã được sử dụng.")
+        user.email = email
     if payload.phone is not None:
-        user.phone = payload.phone
+        user.phone = payload.phone.strip() if payload.phone else None
     if payload.department is not None:
         user.department = payload.department
     if payload.position is not None:
@@ -216,8 +316,28 @@ def update_user(
         user.status = payload.status
     if payload.card_number is not None:
         user.card_number = payload.card_number
+    if payload.avatar_url is not None:
+        user.avatar_url = payload.avatar_url
     if payload.password:
         user.hashed_password = get_password_hash(payload.password)
+
+    # Sync access areas
+    if payload.access_areas is not None:
+        db.query(AccessRule).filter(AccessRule.user_id == user.id).delete(synchronize_session=False)
+        all_doors = db.query(Door).all()
+        for area_name in payload.access_areas:
+            matched_door = next((d for d in all_doors if d.name == area_name or d.id == area_name or d.door_code == area_name), None)
+            if matched_door:
+                rule = AccessRule(
+                    name=f"Quyền {matched_door.name} - {user.full_name}",
+                    user_id=user.id,
+                    door_id=matched_door.id,
+                    start_time="00:00:00",
+                    end_time="23:59:59",
+                    allowed_days=[1, 2, 3, 4, 5, 6, 7],
+                    is_active=True,
+                )
+                db.add(rule)
 
     audit = AuditLog(
         action="USER_UPDATE",
@@ -230,6 +350,19 @@ def update_user(
     db.add(audit)
     db.commit()
     db.refresh(user)
+
+    try:
+        await ws_manager.broadcast({
+            "type": "USER_UPDATED",
+            "data": {
+                "id": user.id,
+                "employee_id": user.employee_id,
+                "full_name": user.full_name,
+                "status": user.status,
+            }
+        })
+    except Exception:
+        pass
 
     return _to_user_out(user)
 

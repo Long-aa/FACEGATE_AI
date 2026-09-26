@@ -92,6 +92,7 @@ export interface HeadPoseAnalysisFrame {
   lux: number;
   isMirrored: boolean;
   timestamp: number;
+  landmarks?: any[];
 }
 
 export const POSE_STEP_META = [
@@ -849,6 +850,7 @@ class HeadPoseDetector {
       lux,
       isMirrored: this.isMirrored,
       timestamp,
+      landmarks,
     };
   }
 }
