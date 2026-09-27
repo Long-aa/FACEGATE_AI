@@ -89,19 +89,43 @@ export async function getFaceLandmarker(): Promise<FaceLandmarker> {
       );
     }
 
-    const landmarker = await FaceLandmarker.createFromOptions(vision, {
-      baseOptions: {
-        modelAssetPath: "/models/face_landmarker.task",
-        delegate: "GPU",
-      },
-      outputFaceBlendshapes: true,
-      outputFacialTransformationMatrixes: true,
-      runningMode: "VIDEO",
-      numFaces: 2,
-      minFaceDetectionConfidence: 0.5,
-      minFacePresenceConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-    });
+    let landmarker;
+    try {
+      const gpuPromise = FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "/models/face_landmarker.task",
+          delegate: "GPU",
+        },
+        outputFaceBlendshapes: true,
+        outputFacialTransformationMatrixes: true,
+        runningMode: "VIDEO",
+        numFaces: 2,
+        minFaceDetectionConfidence: 0.5,
+        minFacePresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("GPU delegate timeout")), 1200)
+      );
+
+      landmarker = (await Promise.race([gpuPromise, timeoutPromise])) as any;
+    } catch (gpuErr) {
+      console.warn("MediaPipe GPU delegate slow/failed, falling back to CPU:", gpuErr);
+      landmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: "/models/face_landmarker.task",
+          delegate: "CPU",
+        },
+        outputFaceBlendshapes: true,
+        outputFacialTransformationMatrixes: true,
+        runningMode: "VIDEO",
+        numFaces: 2,
+        minFaceDetectionConfidence: 0.5,
+        minFacePresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5,
+      });
+    }
 
     landmarkerInstance = landmarker;
     return landmarker;
@@ -274,17 +298,27 @@ export class RecognitionPipelineController {
       statusText: "Đang chờ nhận diện...",
     };
 
-    if (
-      !this.videoEl ||
-      !this.landmarker ||
-      this.videoEl.readyState < 2 ||
-      !this.videoEl.videoWidth ||
-      !this.videoEl.videoHeight ||
-      this.videoEl.paused ||
-      this.videoEl.ended
-    ) {
+    if (!this.videoEl) {
       this.state = "CAMERA_READY";
       emptyAnalysis.statusText = "Đang chờ kết nối Camera...";
+      return emptyAnalysis;
+    }
+
+    if (this.videoEl.paused || this.videoEl.ended) {
+      this.state = "CAMERA_READY";
+      emptyAnalysis.statusText = "Camera đang tạm dừng • Nhấn tiếp tục";
+      return emptyAnalysis;
+    }
+
+    if (this.videoEl.readyState < 2 || !this.videoEl.videoWidth || !this.videoEl.videoHeight) {
+      this.state = "CAMERA_READY";
+      emptyAnalysis.statusText = "Đang khởi động Camera...";
+      return emptyAnalysis;
+    }
+
+    if (!this.landmarker) {
+      this.state = "CAMERA_READY";
+      emptyAnalysis.statusText = "Đang nạp AI nhận diện...";
       return emptyAnalysis;
     }
 

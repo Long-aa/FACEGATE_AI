@@ -48,7 +48,7 @@ def _to_user_out(user: User) -> UserOut:
         role=user.role,
         status=user.status,
         card_number=user.card_number,
-        avatar_url=user.avatar_url,
+        avatar_url=user.avatar_url or (user.face_profile.master_photo_url if user.face_profile else None),
         access_areas=access_areas,
         has_face_profile=has_face,
         face_status="ok" if has_face else "missing",

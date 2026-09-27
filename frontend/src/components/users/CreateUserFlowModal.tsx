@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/ToastNotification";
+import { uploadAvatarToSupabase, syncFaceProfileToSupabase } from "@/lib/supabase";
 import {
   headPoseDetector,
   HeadPoseStep,
@@ -491,6 +492,19 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
     try {
       const selectedDoorNames = doors.filter((d) => d.selected).map((d) => d.name);
 
+      // 0. Upload avatar to Supabase Cloud Storage (or optimize lightweight data)
+      let photoUrl = avatarPreview || undefined;
+      if (avatarPreview) {
+        try {
+          const uploadRes = await uploadAvatarToSupabase(avatarPreview, form.employeeId.trim());
+          if (uploadRes?.url) {
+            photoUrl = uploadRes.url;
+          }
+        } catch (uploadErr) {
+          console.warn("Supabase avatar upload notice:", uploadErr);
+        }
+      }
+
       // 1. Step 1 & 2: Persist user profile and Access Control in CSDL
       try {
         await api.users.create({
@@ -504,7 +518,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
           status: "WAITING",
           card_number: form.rfidCode || undefined,
           access_areas: selectedDoorNames,
-          avatar_url: avatarPreview || undefined,
+          avatar_url: photoUrl,
           password: "Password@123",
         });
       } catch (createErr: any) {
@@ -516,12 +530,21 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
             department: form.department,
             position: form.position,
             access_areas: selectedDoorNames,
-            avatar_url: avatarPreview || undefined,
+            avatar_url: photoUrl,
           });
         } catch {
           // ignore if already in sync
         }
       }
+
+      // Sync to Supabase face biometric table if available
+      syncFaceProfileToSupabase({
+        employee_id: form.employeeId.trim(),
+        encoding_vector: faceVector,
+        quality_score: 0.98,
+        samples_count: 30,
+        master_photo_url: photoUrl,
+      }).catch(() => {});
 
       // 2. Step 5, 6, 7: Biometric encoding registration with duplicate face check
       await api.faces.enroll({
@@ -529,7 +552,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
         encoding_vector: faceVector,
         quality_score: 0.98,
         samples_count: 30,
-        master_photo_url: avatarPreview || undefined,
+        master_photo_url: photoUrl,
       });
 
       stopCamera();

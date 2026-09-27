@@ -39,7 +39,7 @@ class FaceProfile(Base):
     status = Column(String(50), default="ACTIVE", nullable=False, index=True)  # PENDING, ACTIVE, FAILED, CANCELLED
     quality_score = Column(Float, nullable=True)
     samples_count = Column(Integer, default=1, nullable=False)
-    master_photo_url = Column(String(500), nullable=True)
+    master_photo_url = Column(Text, nullable=True)
 
     registered_at = Column(DateTime(timezone=True), server_default=func.now())
     registered_by = Column(String(100), nullable=True)

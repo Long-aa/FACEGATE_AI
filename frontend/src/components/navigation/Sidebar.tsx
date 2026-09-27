@@ -225,7 +225,7 @@ export function Sidebar() {
                 background: active
                   ? "linear-gradient(135deg, rgba(0,212,170,0.12) 0%, rgba(59,130,246,0.08) 100%)"
                   : hovered
-                  ? "rgba(255,255,255,0.04)"
+                  ? "var(--bg-card-hover)"
                   : "transparent",
                 borderLeft: active ? "2px solid var(--accent-teal)" : "2px solid transparent",
                 color: active ? "var(--accent-teal)" : hovered ? "var(--text-primary)" : "var(--text-secondary)",

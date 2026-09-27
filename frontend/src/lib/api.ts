@@ -32,10 +32,18 @@ async function request<T>(
     ...(options.headers || {}),
   };
 
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers,
+    });
+  } catch (netErr: any) {
+    console.warn(`[API Network Error] ${options.method || "GET"} ${url}:`, netErr);
+    throw new Error(
+      `Không thể kết nối đến máy chủ (${url}). Vui lòng kiểm tra dịch vụ backend hoặc thử lại.`
+    );
+  }
 
   if (!response.ok) {
     let errorDetail = `Lỗi hệ thống (${response.status})`;

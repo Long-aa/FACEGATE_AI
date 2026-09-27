@@ -22,6 +22,20 @@
   --sidebar-width: 220px;
 }
 
+html.light {
+  --bg-primary: #F8FAFC;
+  --bg-secondary: #F1F5F9;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #F8FAFC;
+  --bg-sidebar: #FFFFFF;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.16);
+  --text-primary: #0F172A;
+  --text-secondary: #475569;
+  --text-muted: #94A3B8;
+  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.05);
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -85,3 +99,243 @@ html, body {
 .animate-blink { animation: blink 1.5s ease-in-out infinite; }
 .animate-glow { animation: glow-pulse 2s ease-in-out infinite; }
 .animate-spin { animation: spin 0.8s linear infinite; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Comprehensive Light Mode Overrides
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Scrollbar in Light Mode */
+html.light ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.16);
+  border-radius: 4px;
+}
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+/* Sidebar in Light Mode */
+html.light aside {
+  background: #FFFFFF !important;
+  border-right: 1px solid rgba(0, 0, 0, 0.08) !important;
+  box-shadow: 2px 0 16px rgba(0, 0, 0, 0.03) !important;
+}
+
+html.light aside nav a:not([style*="var(--accent-teal)"]):not([style*="#00D4AA"]) {
+  color: #475569 !important;
+}
+
+html.light aside nav a:hover {
+  background: #F1F5F9 !important;
+  color: #0F172A !important;
+}
+
+html.light aside nav a[style*="var(--accent-teal)"],
+html.light aside nav a[style*="#00D4AA"] {
+  background: rgba(0, 212, 170, 0.1) !important;
+  color: #0D9488 !important;
+}
+
+html.light #sidebar-logout-btn {
+  color: #64748B !important;
+}
+html.light #sidebar-logout-btn:hover {
+  background: rgba(239, 68, 68, 0.08) !important;
+  color: #DC2626 !important;
+}
+
+/* Global Content Background & Typography in Light Mode */
+html.light body,
+html.light main {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+html.light h1,
+html.light h2,
+html.light h3,
+html.light h4,
+html.light h5,
+html.light h6 {
+  color: #0F172A !important;
+}
+
+html.light [style*="color: #F8FAFC"],
+html.light [style*="color: #F1F5F9"],
+html.light [style*="color: rgb(248, 250, 252)"],
+html.light [style*="color: #F8FAFC"],
+html.light [style*="color: #F1F5F9"],
+html.light [style*="color: #E2E8F0"],
+html.light [style*="color: #CBD5E1"],
+html.light [style*="color: rgb(248, 250, 252)"],
+html.light [style*="color: rgb(241, 245, 249)"],
+html.light [style*="color: rgb(226, 232, 240)"] {
+  color: #0F172A !important;
+}
+
+html.light [style*="color: #94A3B8"],
+html.light [style*="color: #64748B"],
+html.light [style*="color: rgb(148, 163, 184)"],
+html.light [style*="color: rgb(100, 116, 139)"] {
+  color: #475569 !important;
+}
+
+/* Card Containers & Panels in Light Mode */
+html.light [style*="rgba(13, 20, 36"],
+html.light [style*="rgba(13, 19, 33"],
+html.light [style*="rgba(13, 25, 45"],
+html.light [style*="rgba(10, 18, 30"],
+html.light [style*="rgba(20, 25, 35"],
+html.light [style*="rgba(10, 14, 24"],
+html.light [style*="rgba(10, 15, 26"],
+html.light [style*="rgba(10, 15, 28"],
+html.light [style*="rgba(10, 20, 36"],
+html.light [style*="rgba(15, 23, 42"],
+html.light [style*="rgba(16, 22, 36"],
+html.light [style*="rgba(18, 24, 38"],
+html.light [style*="rgba(7, 10, 18"],
+html.light [style*="rgba(7, 12, 22"],
+html.light [style*="rgba(8, 12, 20"],
+html.light [style*="rgba(11, 15, 25"],
+html.light [style*="background: #111827"],
+html.light [style*="background: #0E1729"],
+html.light [style*="background: #0D1321"],
+html.light [style*="background: #0A0F1C"],
+html.light [style*="background: #0A111E"],
+html.light [style*="background: #0D1A2C"],
+html.light [style*="background: #0D1F35"],
+html.light [style*="background: #0D2035"],
+html.light [style*="background: #0E2238"],
+html.light [style*="background: #101F33"],
+html.light [style*="background: #1E293B"] {
+  background: #FFFFFF !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04) !important;
+}
+
+/* Nested sub-metric boxes & tiles in Light Mode */
+html.light [style*="rgba(255, 255, 255, 0.02)"],
+html.light [style*="rgba(255, 255, 255, 0.03)"],
+html.light [style*="rgba(255, 255, 255, 0.04)"],
+html.light [style*="rgba(255, 255, 255, 0.05)"],
+html.light [style*="rgba(255, 255, 255, 0.06)"],
+html.light [style*="rgba(255, 255, 255, 0.08)"]:not(button):not([style*="radial-gradient"]):not([style*="linear-gradient"]) {
+  background: #F8FAFC !important;
+  border-color: rgba(0, 0, 0, 0.06) !important;
+}
+
+/* Card Header/Footer bars */
+html.light [style*="rgba(9, 14, 26"] {
+  background: #F8FAFC !important;
+  border-color: rgba(0, 0, 0, 0.08) !important;
+}
+
+/* Surveillance Camera Feeds & Video Players: Keep pitch black for high contrast */
+html.light video,
+html.light canvas,
+html.light [style*="background: #050A14"],
+html.light [style*="background: #000000"],
+html.light [style*="radial-gradient(ellipse at center, #0B1528"],
+html.light [style*="radial-gradient(ellipse at center, rgba(10, 20, 35"] {
+  background: #050A14 !important;
+  color: #F8FAFC !important;
+}
+html.light [style*="background: #050A14"] *,
+html.light [style*="background: #000000"] *,
+html.light [style*="radial-gradient(ellipse at center, #0B1528"] *,
+html.light [style*="radial-gradient(ellipse at center, rgba(10, 20, 35"] * {
+  color: #F8FAFC;
+}
+
+/* Tables across all pages */
+html.light table {
+  color: #0F172A;
+}
+
+html.light table thead tr {
+  background: #F1F5F9 !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08) !important;
+}
+
+html.light table th {
+  color: #475569 !important;
+  font-weight: 700 !important;
+}
+
+html.light table td {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06) !important;
+  color: #0F172A !important;
+}
+
+html.light table tbody tr:hover {
+  background: rgba(0, 0, 0, 0.02) !important;
+}
+
+/* Form Controls: Inputs, Selects, Textareas */
+html.light input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+html.light select,
+html.light textarea {
+  background: #FFFFFF !important;
+  color: #0F172A !important;
+  border: 1px solid rgba(0, 0, 0, 0.15) !important;
+}
+
+html.light input:focus,
+html.light select:focus,
+html.light textarea:focus {
+  border-color: #00D4AA !important;
+  box-shadow: 0 0 0 3px rgba(0, 212, 170, 0.15) !important;
+}
+
+html.light input::placeholder,
+html.light textarea::placeholder {
+  color: #94A3B8 !important;
+}
+
+html.light select option {
+  background: #FFFFFF !important;
+  color: #0F172A !important;
+}
+
+/* Secondary & Muted Action Buttons */
+html.light button[style*="rgba(255, 255, 255, 0.04)"],
+html.light button[style*="rgba(255, 255, 255, 0.05)"],
+html.light button[style*="rgba(255, 255, 255, 0.06)"],
+html.light button[style*="rgba(255, 255, 255, 0.08)"]:not([style*="linear-gradient"]) {
+  background: #FFFFFF !important;
+  border: 1px solid rgba(0, 0, 0, 0.12) !important;
+  color: #334155 !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04) !important;
+}
+
+html.light button[style*="rgba(255, 255, 255, 0.04)"]:hover,
+html.light button[style*="rgba(255, 255, 255, 0.05)"]:hover,
+html.light button[style*="rgba(255, 255, 255, 0.06)"]:hover,
+html.light button[style*="rgba(255, 255, 255, 0.08)"]:hover {
+  background: #F1F5F9 !important;
+  color: #0F172A !important;
+}
+
+/* Modals & Dialog Popups */
+html.light [role="dialog"],
+html.light .modal-container,
+html.light div[style*="zIndex: 1000"] > div,
+html.light div[style*="zIndex: 999"] > div,
+html.light div[style*="z-index: 1000"] > div,
+html.light div[style*="z-index: 999"] > div,
+html.light [style*="rgba(10, 15, 28"] {
+  background: #FFFFFF !important;
+  border-color: rgba(0, 0, 0, 0.1) !important;
+  color: #0F172A !important;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.2) !important;
+}
+
+html.light [role="dialog"] label,
+html.light .modal-container label {
+  color: #334155 !important;
+}
+
+html.light [role="dialog"] p,
+html.light .modal-container p {
+  color: #64748B;
+}
+

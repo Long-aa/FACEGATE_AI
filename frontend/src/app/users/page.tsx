@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import { CreateUserFlowModal } from "@/components/users/CreateUserFlowModal";
 import { toast as notify } from "@/components/ui/ToastNotification";
 import { useRealtimeEvents, RealtimeEventPayload } from "@/lib/useRealtimeEvents";
+import { uploadAvatarToSupabase, syncFaceProfileToSupabase } from "@/lib/supabase";
 import {
   headPoseDetector,
   HeadPoseStep,
@@ -27,6 +28,7 @@ interface User {
   email?: string;
   phone?: string;
   accessAreas?: string[];
+  avatarUrl?: string;
 }
 
 interface UserAccessLog {
@@ -56,6 +58,80 @@ function initials(name: string) {
   return name.split(" ").map((n) => n[0]).slice(-2).join("");
 }
 
+function UserAvatar({
+  user,
+  size = 40,
+  borderRadius = 8,
+  fontSize = 13,
+}: {
+  user: { id: string; name: string; avatarUrl?: string };
+  size?: number;
+  borderRadius?: number;
+  fontSize?: number;
+}) {
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [user.avatarUrl]);
+
+  if (user.avatarUrl && !imgError) {
+    return (
+      <div
+        style={{
+          width: size,
+          height: size,
+          borderRadius,
+          overflow: "hidden",
+          flexShrink: 0,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+          border: "1px solid rgba(255,255,255,0.12)",
+          background: "rgba(255,255,255,0.05)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <img
+          src={user.avatarUrl}
+          alt={user.name}
+          onError={() => setImgError(true)}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            display: "block",
+          }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        width: size,
+        height: size,
+        borderRadius,
+        background: avatarColor(user.id),
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize,
+        fontWeight: 700,
+        color: "white",
+        flexShrink: 0,
+        boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        overflow: "hidden",
+        textTransform: "uppercase",
+      }}
+    >
+      {initials(user.name)}
+    </div>
+  );
+}
+
 function IconBtn({ title, color, onClick, children }: { title: string; color?: string; onClick: () => void; children: React.ReactNode }) {
   const [hov, setHov] = useState(false);
   return (
@@ -66,8 +142,8 @@ function IconBtn({ title, color, onClick, children }: { title: string; color?: s
       onMouseLeave={() => setHov(false)}
       style={{
         width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center",
-        background: hov ? (color ? `${color}20` : "rgba(255,255,255,0.1)") : "rgba(255,255,255,0.04)",
-        border: hov && color ? `1px solid ${color}40` : "1px solid transparent",
+        background: hov ? (color ? `${color}20` : "var(--bg-card-hover)") : "var(--bg-secondary)",
+        border: hov && color ? `1px solid ${color}40` : "1px solid var(--border)",
         borderRadius: 8, color: hov && color ? color : "var(--text-secondary)",
         cursor: "pointer", transition: "all 0.18s",
       }}
@@ -107,7 +183,17 @@ function StatusBadge({ status }: { status: User["status"] }) {
 }
 
 // ─── Modal: Xem chi tiết ────────────────────────────────────────────────────
-function ViewDetailModal({ user, onClose, onEdit }: { user: User; onClose: () => void; onEdit: () => void }) {
+function ViewDetailModal({
+  user,
+  onClose,
+  onEdit,
+  onToggleLock,
+}: {
+  user: User;
+  onClose: () => void;
+  onEdit: () => void;
+  onToggleLock?: () => void;
+}) {
   const [history, setHistory] = useState<UserAccessLog[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
 
@@ -135,16 +221,14 @@ function ViewDetailModal({ user, onClose, onEdit }: { user: User; onClose: () =>
 
   return (
     <Overlay onClose={onClose}>
-      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 20, width: 560, maxHeight: "85vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 32px 80px rgba(0,0,0,0.6)" }}>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 20, width: 580, maxHeight: "88vh", display: "flex", flexDirection: "column", overflow: "hidden", boxShadow: "0 32px 80px rgba(0,0,0,0.6)" }}>
         {/* Header */}
         <div style={{ padding: "22px 26px 18px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ width: 44, height: 44, borderRadius: 12, background: avatarColor(user.id), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, color: "white", flexShrink: 0, boxShadow: "0 4px 12px rgba(0,0,0,0.3)" }}>
-              {initials(user.name)}
-            </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <UserAvatar user={user} size={54} borderRadius={14} fontSize={18} />
             <div>
-              <div style={{ fontSize: 17, fontWeight: 700, color: "var(--text-primary)" }}>{user.name}</div>
-              <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>{user.employeeId} · {user.role}</div>
+              <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text-primary)" }}>{user.name}</div>
+              <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>{user.employeeId} · {user.role} · {user.department}</div>
             </div>
           </div>
           <button onClick={onClose} style={{ background: "rgba(255,255,255,0.06)", border: "1px solid var(--border)", borderRadius: 8, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-muted)", cursor: "pointer", fontSize: 18 }}>×</button>
@@ -152,12 +236,29 @@ function ViewDetailModal({ user, onClose, onEdit }: { user: User; onClose: () =>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "22px 26px", display: "flex", flexDirection: "column", gap: 20 }}>
           {/* Status row */}
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <StatusBadge status={user.status} />
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, padding: "5px 11px", borderRadius: 20, background: user.faceStatus === "ok" ? "rgba(0,212,170,0.08)" : "rgba(245,158,11,0.08)", color: user.faceStatus === "ok" ? "var(--accent-teal)" : "var(--accent-orange)", border: `1px solid ${user.faceStatus === "ok" ? "rgba(0,212,170,0.2)" : "rgba(245,158,11,0.2)"}` }}>
               {user.faceStatus === "ok" ? "✓ Face ID: Đã nạp 512-D" : "⚠ Face ID: Chưa thu nạp"}
             </span>
           </div>
+
+          {/* Master Face Photo Card if available */}
+          {user.avatarUrl && (
+            <div style={{ background: "rgba(0,212,170,0.03)", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "center", gap: 16 }}>
+              <div style={{ width: 72, height: 72, borderRadius: 12, overflow: "hidden", border: "1px solid rgba(0,212,170,0.4)", flexShrink: 0, boxShadow: "0 4px 14px rgba(0,0,0,0.4)" }}>
+                <img src={user.avatarUrl} alt={user.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--accent-teal)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <span>✓</span> Ảnh hồ sơ nhận diện khuôn mặt gốc
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.5 }}>
+                  Dữ liệu vector 512 chiều đã được trích xuất từ ảnh này và lưu trữ trong CSDL PostgreSQL phục vụ nhận diện tự động qua camera.
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Info grid */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
@@ -166,6 +267,8 @@ function ViewDetailModal({ user, onClose, onEdit }: { user: User; onClose: () =>
               { label: "Ngày đăng ký", value: user.registeredDate },
               { label: "Email", value: user.email || "—" },
               { label: "Điện thoại", value: user.phone || "—" },
+              { label: "Chức vụ / Vị trí", value: user.role },
+              { label: "Mã định danh ID", value: user.employeeId },
             ].map(({ label, value }) => (
               <div key={label} style={{ background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 14px" }}>
                 <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 6 }}>{label}</div>
@@ -224,7 +327,25 @@ function ViewDetailModal({ user, onClose, onEdit }: { user: User; onClose: () =>
         {/* Footer */}
         <div style={{ padding: "16px 26px", borderTop: "1px solid var(--border)", display: "flex", gap: 10, background: "rgba(0,0,0,0.15)" }}>
           <button onClick={onClose} style={{ flex: 1, padding: "10px", background: "transparent", border: "1px solid var(--border)", borderRadius: 10, color: "var(--text-secondary)", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>Đóng</button>
-          <button onClick={onEdit} style={{ flex: 2, padding: "10px", background: "linear-gradient(135deg,#00C6FF,#0072FF)", border: "none", borderRadius: 10, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 12px rgba(0,114,255,0.3)" }}>
+          {onToggleLock && (
+            <button
+              onClick={onToggleLock}
+              style={{
+                flex: 1.2,
+                padding: "10px",
+                background: user.status === "LOCKED" ? "rgba(0,212,170,0.1)" : "rgba(239,68,68,0.1)",
+                border: `1px solid ${user.status === "LOCKED" ? "rgba(0,212,170,0.3)" : "rgba(239,68,68,0.3)"}`,
+                borderRadius: 10,
+                color: user.status === "LOCKED" ? "var(--accent-teal)" : "#ef4444",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              {user.status === "LOCKED" ? "🔓 Mở khóa" : "🔒 Khóa tài khoản"}
+            </button>
+          )}
+          <button onClick={onEdit} style={{ flex: 1.8, padding: "10px", background: "linear-gradient(135deg,#00C6FF,#0072FF)", border: "none", borderRadius: 10, color: "white", fontSize: 13, fontWeight: 600, cursor: "pointer", boxShadow: "0 4px 12px rgba(0,114,255,0.3)" }}>
             ✏ Chỉnh sửa thông tin
           </button>
         </div>
@@ -234,15 +355,59 @@ function ViewDetailModal({ user, onClose, onEdit }: { user: User; onClose: () =>
 }
 
 // ─── Modal: Chỉnh sửa ───────────────────────────────────────────────────────
-function EditModal({ user, onClose, onSave, departmentsList = [] }: { user: User; onClose: () => void; onSave: (updated: Partial<User>) => Promise<void>; departmentsList?: string[] }) {
-  const [form, setForm] = useState({ name: user.name, role: user.role, department: user.department, email: user.email || "", phone: user.phone || "", status: user.status, accessAreas: [...(user.accessAreas || [])] });
+function EditModal({
+  user,
+  onClose,
+  onSave,
+  departmentsList = [],
+}: {
+  user: User;
+  onClose: () => void;
+  onSave: (updated: Partial<User>) => Promise<void>;
+  departmentsList?: string[];
+}) {
+  const [form, setForm] = useState({
+    name: user.name,
+    role: user.role,
+    department: user.department,
+    email: user.email || "",
+    phone: user.phone || "",
+    status: user.status,
+    accessAreas: [...(user.accessAreas || [])],
+    avatarUrl: user.avatarUrl || "",
+  });
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [saving, setSaving] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const toggleArea = (area: string) => {
     setForm(f => ({
       ...f,
       accessAreas: f.accessAreas.includes(area) ? f.accessAreas.filter(a => a !== area) : [...f.accessAreas, area],
     }));
+  };
+
+  const handleAvatarFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingAvatar(true);
+    try {
+      const res = await uploadAvatarToSupabase(file, user.employeeId || user.id);
+      if (res?.url) {
+        setForm(f => ({ ...f, avatarUrl: res.url }));
+        notify.success("Đã tải ảnh đại diện lên lưu trữ!", "TẢI ẢNH THÀNH CÔNG");
+      }
+    } catch (err: any) {
+      console.warn("Upload to Supabase failed, using base64 fallback:", err);
+      const reader = new FileReader();
+      reader.onload = () => {
+        setForm(f => ({ ...f, avatarUrl: String(reader.result) }));
+        notify.info("Đã lưu ảnh đại diện thành công.", "ẢNH ĐẠI DIỆN");
+      };
+      reader.readAsDataURL(file);
+    } finally {
+      setUploadingAvatar(false);
+    }
   };
 
   const handleSave = async () => {
@@ -270,6 +435,69 @@ function EditModal({ user, onClose, onSave, departmentsList = [] }: { user: User
         </div>
 
         <div style={{ flex: 1, overflowY: "auto", padding: "22px 26px", display: "flex", flexDirection: "column", gap: 20 }}>
+          {/* Avatar Edit Section */}
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 10 }}>Ảnh đại diện nhân sự</div>
+            <div style={{ background: "rgba(255,255,255,0.025)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px 16px", display: "flex", alignItems: "center", gap: 16 }}>
+              <UserAvatar user={{ ...user, avatarUrl: form.avatarUrl }} size={64} borderRadius={16} fontSize={20} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)" }}>
+                  {form.avatarUrl ? "Ảnh chân dung đã thiết lập" : "Chưa có ảnh chân dung"}
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 }}>
+                  {form.avatarUrl ? "Ảnh được đồng bộ với CSDL và nhận diện sinh trắc học." : "Đang hiển thị avatar mặc định theo tên. Bạn có thể tải ảnh chụp thực tế lên."}
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button
+                    type="button"
+                    disabled={uploadingAvatar}
+                    onClick={() => fileInputRef.current?.click()}
+                    style={{
+                      padding: "6px 12px",
+                      background: "rgba(0,212,170,0.12)",
+                      border: "1px solid rgba(0,212,170,0.3)",
+                      borderRadius: 8,
+                      color: "var(--accent-teal)",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: uploadingAvatar ? "wait" : "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    {uploadingAvatar ? "Đang tải ảnh..." : "📁 Chọn ảnh mới"}
+                  </button>
+                  {form.avatarUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setForm(f => ({ ...f, avatarUrl: "" }))}
+                      style={{
+                        padding: "6px 12px",
+                        background: "rgba(239,68,68,0.1)",
+                        border: "1px solid rgba(239,68,68,0.25)",
+                        borderRadius: 8,
+                        color: "#ef4444",
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      🗑 Gỡ ảnh
+                    </button>
+                  )}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleAvatarFileChange}
+                    style={{ display: "none" }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 14 }}>Thông tin cơ bản</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
@@ -303,7 +531,7 @@ function EditModal({ user, onClose, onSave, departmentsList = [] }: { user: User
                     const colors: Record<string, string> = { ACTIVE: "#00D4AA", WAITING: "#F59E0B", DRAFT: "#9CA3AF", LOCKED: "#ef4444" };
                     const isSelected = form.status === s;
                     return (
-                      <button key={s} onClick={() => setForm(f => ({ ...f, status: s }))} style={{ flex: 1, padding: "8px 6px", borderRadius: 8, border: isSelected ? `1px solid ${colors[s]}` : "1px solid rgba(255,255,255,0.1)", background: isSelected ? `${colors[s]}18` : "rgba(255,255,255,0.03)", color: isSelected ? colors[s] : "var(--text-muted)", fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s" }}>
+                      <button key={s} type="button" onClick={() => setForm(f => ({ ...f, status: s }))} style={{ flex: 1, padding: "8px 6px", borderRadius: 8, border: isSelected ? `1px solid ${colors[s]}` : "1px solid rgba(255,255,255,0.1)", background: isSelected ? `${colors[s]}18` : "rgba(255,255,255,0.03)", color: isSelected ? colors[s] : "var(--text-muted)", fontSize: 12, fontWeight: 600, cursor: "pointer", transition: "all 0.15s" }}>
                         {labels[s]}
                       </button>
                     );
@@ -1412,7 +1640,7 @@ function FaceEnrollModal({
 // ─── Modal: Khóa / Mở khóa ──────────────────────────────────────────────────
 function LockModal({ user, onClose, onConfirm }: { user: User; onClose: () => void; onConfirm: () => Promise<void> }) {
   const isLocked = user.status === "LOCKED";
-  const [confirmed, setConfirmed] = useState(false);
+  const [confirmed, setConfirmed] = useState(true);
   const [loading, setLoading] = useState(false);
 
   const handleConfirm = async () => {
@@ -1429,14 +1657,12 @@ function LockModal({ user, onClose, onConfirm }: { user: User; onClose: () => vo
 
   return (
     <Overlay onClose={onClose}>
-      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 20, width: 460, boxShadow: "0 32px 80px rgba(0,0,0,0.6)" }}>
+      <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 20, width: 480, boxShadow: "0 32px 80px rgba(0,0,0,0.6)" }}>
         <div style={{ padding: "22px 26px 18px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 10, background: isLocked ? "rgba(0,212,170,0.1)" : "rgba(239,68,68,0.1)", border: `1px solid ${isLocked ? "rgba(0,212,170,0.3)" : "rgba(239,68,68,0.3)"}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>
-              {isLocked ? "🔓" : "🔒"}
-            </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <UserAvatar user={user} size={46} borderRadius={12} fontSize={16} />
             <div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)" }}>{isLocked ? "Mở khóa tài khoản" : "Khóa tài khoản"}</div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: "var(--text-primary)" }}>{isLocked ? "Mở khóa tài khoản" : "Khóa tài khoản"}</div>
               <div style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 2 }}>{user.employeeId} · {user.name}</div>
             </div>
           </div>
@@ -1444,22 +1670,23 @@ function LockModal({ user, onClose, onConfirm }: { user: User; onClose: () => vo
         </div>
 
         <div style={{ padding: "22px 26px" }}>
-          <div style={{ padding: "14px 16px", background: isLocked ? "rgba(0,212,170,0.06)" : "rgba(239,68,68,0.06)", border: `1px solid ${isLocked ? "rgba(0,212,170,0.2)" : "rgba(239,68,68,0.2)"}`, borderRadius: 12, marginBottom: 20 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: isLocked ? "var(--accent-teal)" : "#ef4444", marginBottom: 6 }}>
-              {isLocked ? "⚠ Hành động: Khôi phục truy cập trong CSDL" : "⚠ Hành động này sẽ vô hiệu hóa người dùng ngay lập tức"}
+          <div style={{ padding: "16px 18px", background: isLocked ? "rgba(0,212,170,0.06)" : "rgba(239,68,68,0.06)", border: `1px solid ${isLocked ? "rgba(0,212,170,0.25)" : "rgba(239,68,68,0.25)"}`, borderRadius: 14, marginBottom: 20 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: isLocked ? "var(--accent-teal)" : "#ef4444", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
+              <span>{isLocked ? "🔓" : "🔒"}</span>
+              {isLocked ? "Hành động: Khôi phục quyền truy cập" : "Hành động: Vô hiệu hóa quyền ra vào ngay lập tức"}
             </div>
             <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.6 }}>
               {isLocked
-                ? <>Tài khoản của <strong>{user.name}</strong> sẽ được mở khóa trong cơ sở dữ liệu. Quyền mở cửa sẽ được kích hoạt lại.</>
-                : <>Tài khoản của <strong>{user.name}</strong> sẽ bị khóa trong CSDL. Face ID sẽ bị từ chối tại tất cả các cửa kiểm soát.</>
+                ? <>Tài khoản của <strong>{user.name}</strong> sẽ được kích hoạt lại trong CSDL PostgreSQL. Quyền mở cửa qua nhận diện khuôn mặt tự động được khôi phục.</>
+                : <>Tài khoản của <strong>{user.name}</strong> sẽ bị khóa trong CSDL PostgreSQL. Hệ thống nhận diện FaceGate AI sẽ ngay lập tức từ chối quyền mở cửa tại mọi điểm kiểm soát (Fail-Safe Lock).</>
               }
             </div>
           </div>
 
-          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: 20 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: 20, userSelect: "none" }}>
             <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} style={{ width: 18, height: 18, accentColor: isLocked ? "var(--accent-teal)" : "#ef4444" }} />
             <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-              Tôi xác nhận muốn <strong style={{ color: isLocked ? "var(--accent-teal)" : "#ef4444" }}>{isLocked ? "mở khóa" : "khóa"}</strong> tài khoản này
+              Tôi xác nhận muốn <strong style={{ color: isLocked ? "var(--accent-teal)" : "#ef4444" }}>{isLocked ? "mở khóa" : "khóa"}</strong> tài khoản này trong CSDL
             </span>
           </label>
 
@@ -1468,7 +1695,7 @@ function LockModal({ user, onClose, onConfirm }: { user: User; onClose: () => vo
             <button
               disabled={!confirmed || loading}
               onClick={handleConfirm}
-              style={{ flex: 2, padding: "11px", border: "none", borderRadius: 10, color: "white", fontSize: 13, fontWeight: 600, cursor: confirmed && !loading ? "pointer" : "not-allowed", opacity: confirmed ? 1 : 0.4, background: isLocked ? "linear-gradient(135deg,#00D4AA,#3B82F6)" : "linear-gradient(135deg,#ef4444,#b91c1c)", transition: "opacity 0.2s" }}
+              style={{ flex: 2, padding: "11px", border: "none", borderRadius: 10, color: "white", fontSize: 13, fontWeight: 600, cursor: confirmed && !loading ? "pointer" : "not-allowed", opacity: confirmed ? 1 : 0.4, background: isLocked ? "linear-gradient(135deg,#00D4AA,#3B82F6)" : "linear-gradient(135deg,#ef4444,#b91c1c)", transition: "opacity 0.2s", boxShadow: isLocked ? "0 4px 14px rgba(0,212,170,0.25)" : "0 4px 14px rgba(239,68,68,0.25)" }}
             >
               {loading ? "Đang xử lý..." : isLocked ? "🔓 Mở khóa tài khoản" : "🔒 Xác nhận khóa tài khoản"}
             </button>
@@ -1745,7 +1972,7 @@ function Toast({ msg, type }: { msg: string; type: "success" | "info" }) {
   );
 }
 
-const inputStyle: React.CSSProperties = { padding: "10px 14px", background: "rgba(0,0,0,0.2)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, color: "var(--text-primary)", fontSize: 13, outline: "none", width: "100%" };
+const inputStyle: React.CSSProperties = { padding: "10px 14px", background: "var(--bg-secondary)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-primary)", fontSize: 13, outline: "none", width: "100%" };
 
 // ─── Main page ───────────────────────────────────────────────────────────────
 export default function UsersPage() {
@@ -1826,6 +2053,7 @@ export default function UsersPage() {
           email: u.email,
           phone: u.phone || u.phone_number || "0988 234 567",
           accessAreas: u.access_areas || ["Cửa chính Lobby", "Phòng Server Kỹ thuật"],
+          avatarUrl: u.avatar_url || (u.face_profile ? u.face_profile.master_photo_url : undefined),
         }));
         setUsers(mappedUsers);
         setTotalCount(res.total || mappedUsers.length);
@@ -1867,26 +2095,34 @@ export default function UsersPage() {
         email: patch.email,
         phone: patch.phone,
         status: patch.status,
+        avatar_url: patch.avatarUrl,
       });
-      showToast(`Đã cập nhật thông tin ${patch.name || modal.user.name} vào CSDL!`);
+      showToast(`Đã cập nhật thông tin ${patch.name || modal.user.name} vào CSDL!`, "success");
+      setModal(null);
       await loadUsers();
-    } catch (err) {
-      console.error(err);
-      showToast("Lỗi khi cập nhật vào CSDL", "info");
+    } catch (err: any) {
+      console.error("Failed to update user:", err);
+      showToast(err?.message || "Lỗi khi cập nhật vào CSDL", "info");
     }
   };
 
   const handleToggleStatus = async () => {
     if (!modal?.user) return;
     try {
-      const targetStatus = modal.user.status === "ACTIVE" ? "LOCKED" : "ACTIVE";
+      const targetStatus = modal.user.status === "LOCKED" ? "ACTIVE" : "LOCKED";
       const res = await api.users.toggleStatus(modal.user.id, targetStatus);
-      const newStatus = res.status;
-      showToast(`Tài khoản ${modal.user.name} đã được ${newStatus === "LOCKED" ? "khóa" : "mở khóa"} trong CSDL.`);
+      const newStatus = res?.status || targetStatus;
+      showToast(
+        newStatus === "LOCKED"
+          ? `Đã khóa tài khoản ${modal.user.name} thành công. Quyền truy cập bị vô hiệu hóa.`
+          : `Đã mở khóa tài khoản ${modal.user.name} thành công. Khôi phục quyền ra vào.`,
+        "success"
+      );
+      setModal(null);
       await loadUsers();
-    } catch (err) {
-      console.error(err);
-      showToast("Lỗi khi thay đổi trạng thái trong CSDL", "info");
+    } catch (err: any) {
+      console.error("Failed to toggle user status:", err);
+      showToast(err?.message || "Lỗi khi thay đổi trạng thái trong CSDL", "info");
     }
   };
 
@@ -1909,25 +2145,56 @@ export default function UsersPage() {
           ? enrollData.vector
           : generateBiometricVector(modal.user.employeeId);
 
+      // 1. Upload photo to Supabase Cloud Storage (or optimized lightweight storage)
+      let photoUrl = enrollData?.photoUrl;
+      let storageSource = "local";
+
+      if (enrollData?.photoUrl) {
+        try {
+          const uploadRes = await uploadAvatarToSupabase(enrollData.photoUrl, modal.user.employeeId);
+          if (uploadRes?.url) {
+            photoUrl = uploadRes.url;
+            storageSource = uploadRes.source;
+          }
+        } catch (uploadErr) {
+          console.warn("Supabase upload notice:", uploadErr);
+        }
+      }
+
+      // 2. Sync to Supabase face biometric table if available
+      syncFaceProfileToSupabase({
+        employee_id: modal.user.employeeId,
+        encoding_vector: vec,
+        quality_score: 0.98,
+        samples_count: 30,
+        master_photo_url: photoUrl,
+      }).catch(() => {});
+
+      // 3. Register face profile in backend database
       await api.faces.enroll({
         employee_id: modal.user.employeeId,
         encoding_vector: vec,
         quality_score: 0.98,
         samples_count: 30,
-        master_photo_url: enrollData?.photoUrl,
+        master_photo_url: photoUrl,
       });
 
-      if (enrollData?.photoUrl) {
+      // 4. Update user avatar
+      if (photoUrl) {
         try {
           await api.users.update(modal.user.id, {
-            avatar_url: enrollData.photoUrl,
+            avatar_url: photoUrl,
           });
         } catch (e) {
           console.warn("Update avatar error:", e);
         }
       }
 
-      showToast(`Face ID của ${modal.user.name} đã được kích hoạt thành công trong CSDL!`, "success");
+      const msg = storageSource === "supabase"
+        ? `Face ID của ${modal.user.name} đã được lưu trên Supabase Cloud & CSDL thành công!`
+        : `Face ID của ${modal.user.name} đã được kích hoạt thành công trong CSDL!`;
+
+      showToast(msg, "success");
       await loadUsers();
     } catch (err: any) {
       console.error("Face enrollment failed:", err);
@@ -2011,7 +2278,7 @@ export default function UsersPage() {
           </div>
 
           {/* Filter bar */}
-          <div style={{ background: "rgba(20,25,35,0.5)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, padding: "14px 16px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", boxShadow: "var(--shadow-card)" }}>
             <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
               <svg style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm kiếm tên hoặc Mã NV trong CSDL..." style={{ ...inputStyle, paddingLeft: 36 }} />
@@ -2024,7 +2291,7 @@ export default function UsersPage() {
                 {opts.map(o => { const [v, l] = o.split(":"); return <option key={v} value={v}>{l}</option>; })}
               </select>
             ))}
-            <button onClick={() => { setSearch(""); setSelectedDept("all"); setSelectedStatus("all"); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", whiteSpace: "nowrap" }}>
+            <button onClick={() => { setSearch(""); setSelectedDept("all"); setSelectedStatus("all"); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "var(--bg-secondary)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", whiteSpace: "nowrap" }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
               Xóa bộ lọc
             </button>
@@ -2060,9 +2327,7 @@ export default function UsersPage() {
                         style={{ borderBottom: "1px solid var(--border)", transition: "background 0.15s", background: hovered === user.id ? "rgba(255,255,255,0.02)" : "transparent" }}>
                         <td style={{ padding: "14px 16px" }}>
                           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                            <div style={{ width: 40, height: 40, borderRadius: 8, background: avatarColor(user.id), display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: 600, color: "white", flexShrink: 0, boxShadow: "0 2px 8px rgba(0,0,0,0.3)", overflow: "hidden" }}>
-                              {initials(user.name)}
-                            </div>
+                            <UserAvatar user={user} size={40} borderRadius={10} fontSize={13} />
                             <div>
                               <div style={{ fontSize: 14, fontWeight: 600, color: user.status === "LOCKED" ? "var(--text-muted)" : "var(--text-primary)", textDecoration: user.status === "LOCKED" ? "line-through" : "none" }}>{user.name}</div>
                               <div style={{ fontSize: 12, marginTop: 3, display: "flex", alignItems: "center", gap: 4 }}>
@@ -2159,7 +2424,20 @@ export default function UsersPage() {
 
       {/* ── Modals ── */}
       {modal?.type === "view" && (
-        <ViewDetailModal user={modal.user} onClose={() => setModal(null)} onEdit={() => { const u = modal.user; setModal(null); setTimeout(() => openModal("edit", u), 50); }} />
+        <ViewDetailModal
+          user={modal.user}
+          onClose={() => setModal(null)}
+          onEdit={() => {
+            const u = modal.user;
+            setModal(null);
+            setTimeout(() => openModal("edit", u), 50);
+          }}
+          onToggleLock={() => {
+            const u = modal.user;
+            setModal(null);
+            setTimeout(() => openModal("lock", u), 50);
+          }}
+        />
       )}
       {modal?.type === "edit" && (
         <EditModal user={modal.user} departmentsList={departmentsList} onClose={() => setModal(null)} onSave={handleUpdateUser} />

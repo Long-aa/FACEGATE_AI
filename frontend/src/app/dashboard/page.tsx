@@ -189,9 +189,9 @@ function StatCardItem({ card, delay }: { card: StatCard; delay: number }) {
       onMouseLeave={() => setIsHovered(false)}
       style={{
         background: isHovered
-          ? "linear-gradient(135deg, rgba(22, 33, 56, 0.7) 0%, rgba(13, 20, 36, 0.85) 100%)"
-          : "rgba(13, 20, 36, 0.65)",
-        border: `1px solid ${isHovered ? "rgba(0, 212, 170, 0.35)" : "rgba(255, 255, 255, 0.07)"}`,
+          ? "var(--bg-card-hover)"
+          : "var(--bg-card)",
+        border: `1px solid ${isHovered ? "var(--accent-teal)" : "var(--border)"}`,
         borderRadius: 12,
         padding: "12px 14px",
         display: "flex",
@@ -200,7 +200,7 @@ function StatCardItem({ card, delay }: { card: StatCard; delay: number }) {
         minHeight: 104,
         position: "relative",
         overflow: "hidden",
-        boxShadow: isHovered ? "0 8px 25px -8px rgba(0, 212, 170, 0.2)" : "none",
+        boxShadow: isHovered ? "0 8px 25px -8px rgba(0, 212, 170, 0.2)" : "var(--shadow-card)",
         transition: "all 0.22s ease",
         transform: isHovered ? "translateY(-2px)" : "translateY(0)",
         animation: `fadeInUp 0.4s ease ${delay}ms both`,
@@ -243,7 +243,7 @@ function StatCardItem({ card, delay }: { card: StatCard; delay: number }) {
       </div>
 
       {/* Label */}
-      <div style={{ fontSize: 11.5, color: "#94A3B8", fontWeight: 500, marginBottom: 2 }}>
+      <div style={{ fontSize: 11.5, color: "var(--text-secondary)", fontWeight: 500, marginBottom: 2 }}>
         {card.label}
       </div>
 
@@ -253,7 +253,7 @@ function StatCardItem({ card, delay }: { card: StatCard; delay: number }) {
           style={{
             fontSize: 24,
             fontWeight: 800,
-            color: "#F8FAFC",
+            color: "var(--text-primary)",
             letterSpacing: "-0.02em",
             lineHeight: 1,
             fontFamily: "var(--font-sans, inherit)",
@@ -262,14 +262,14 @@ function StatCardItem({ card, delay }: { card: StatCard; delay: number }) {
           {card.id === "alerts" ? String(count).padStart(2, "0") : count.toLocaleString("vi-VN")}
         </span>
         {card.suffix && (
-          <span style={{ fontSize: 16, fontWeight: 700, color: "#94A3B8" }}>
+          <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text-secondary)" }}>
             {card.suffix}
           </span>
         )}
       </div>
 
       {/* Subtext */}
-      <div style={{ fontSize: 10.5, color: "#64748B", fontWeight: 400 }}>
+      <div style={{ fontSize: 10.5, color: "var(--text-muted)", fontWeight: 400 }}>
         {card.subtext}
       </div>
     </div>
@@ -942,7 +942,7 @@ export default function DashboardPage() {
   const peakLeftPercent = ((peakX / 900) * 100).toFixed(1);
 
   return (
-    <div style={{ padding: "18px 24px 40px", minHeight: "100%", background: "#080C14", position: "relative" }}>
+    <div style={{ padding: "18px 24px 40px", minHeight: "100%", background: "var(--bg-primary)", position: "relative" }}>
       {/* ─────────────────────────────────────────────────────────────────── */}
       {/* 1. Header Greeting (NO buttons on the right as requested)           */}
       {/* ─────────────────────────────────────────────────────────────────── */}
@@ -952,7 +952,7 @@ export default function DashboardPage() {
             style={{
               fontSize: 21,
               fontWeight: 800,
-              color: "#F8FAFC",
+              color: "var(--text-primary)",
               letterSpacing: "-0.02em",
               margin: 0,
             }}
@@ -974,7 +974,7 @@ export default function DashboardPage() {
             OpenCV & Face_Recognition
           </span>
         </div>
-        <p style={{ fontSize: 12.5, color: "#94A3B8", margin: 0, fontWeight: 400 }}>
+        <p style={{ fontSize: 12.5, color: "var(--text-secondary)", margin: 0, fontWeight: 400 }}>
           Theo dõi hoạt động nhận diện khuôn mặt và kiểm soát ra vào theo thời gian thực.
         </p>
       </div>
@@ -1011,22 +1011,22 @@ export default function DashboardPage() {
         <div
           ref={cameraContainerRef}
           style={{
-            background: "rgba(13, 20, 36, 0.7)",
-            border: "1px solid rgba(255, 255, 255, 0.08)",
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
             borderRadius: 14,
             overflow: "hidden",
             display: "flex",
             flexDirection: "column",
             position: "relative",
-            boxShadow: "0 12px 40px rgba(0, 0, 0, 0.4)",
+            boxShadow: "var(--shadow-card)",
           }}
         >
           {/* Top Bar of Camera Feed */}
           <div
             style={{
               padding: "10px 14px",
-              background: "rgba(9, 14, 26, 0.9)",
-              borderBottom: "1px solid rgba(255, 255, 255, 0.08)",
+              background: "var(--bg-secondary)",
+              borderBottom: "1px solid var(--border)",
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
@@ -1411,8 +1411,8 @@ export default function DashboardPage() {
           <div
             style={{
               padding: "10px 14px",
-              background: "rgba(9, 14, 26, 0.95)",
-              borderTop: "1px solid rgba(255, 255, 255, 0.08)",
+              background: "var(--bg-secondary)",
+              borderTop: "1px solid var(--border)",
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
@@ -1527,13 +1527,14 @@ export default function DashboardPage() {
           {/* ───────────────────────────────────────────────────────────── */}
           <div
             style={{
-              background: "rgba(13, 20, 36, 0.65)",
-              border: "1px solid rgba(255, 255, 255, 0.08)",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
               borderRadius: 14,
               padding: "14px 16px",
               display: "flex",
               flexDirection: "column",
               gap: 11,
+              boxShadow: "var(--shadow-card)",
             }}
           >
             {/* Header */}
@@ -1543,7 +1544,7 @@ export default function DashboardPage() {
                   <circle cx="12" cy="12" r="3" />
                   <path d="M12 2v3m0 14v3m10-10h-3M5 12H2m15.07-7.07l-2.12 2.12M7.05 16.95l-2.12 2.12m14.14 0l-2.12-2.12M7.05 7.05L4.93 4.93" />
                 </svg>
-                <span style={{ fontSize: 12.5, fontWeight: 800, color: "#F8FAFC", letterSpacing: "0.04em" }}>
+                <span style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "0.04em" }}>
                   AI RECOGNITION ENGINE
                 </span>
               </div>
@@ -1653,13 +1654,14 @@ export default function DashboardPage() {
           {/* ───────────────────────────────────────────────────────────── */}
           <div
             style={{
-              background: "rgba(13, 20, 36, 0.65)",
-              border: "1px solid rgba(255, 255, 255, 0.08)",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
               borderRadius: 14,
               padding: "14px 16px",
               display: "flex",
               flexDirection: "column",
               gap: 10,
+              boxShadow: "var(--shadow-card)",
             }}
           >
             {/* Header */}
@@ -1668,7 +1670,7 @@ export default function DashboardPage() {
                 <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M3 3h6v18H3z" /><path d="M9 3h6l3 3v12l-3 3H9" /><circle cx="16" cy="12" r="1" fill="currentColor" />
                 </svg>
-                <span style={{ fontSize: 12.5, fontWeight: 800, color: "#F8FAFC", letterSpacing: "0.04em" }}>
+                <span style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "0.04em" }}>
                   DOOR CONTROL
                 </span>
               </div>
@@ -1810,12 +1812,12 @@ export default function DashboardPage() {
       {/* ─────────────────────────────────────────────────────────────────── */}
       <div
         style={{
-          background: "rgba(13, 20, 36, 0.65)",
-          border: "1px solid rgba(255, 255, 255, 0.08)",
+          background: "var(--bg-card)",
+          border: "1px solid var(--border)",
           borderRadius: 14,
           padding: "18px 20px",
           marginBottom: 18,
-          boxShadow: "0 10px 30px rgba(0, 0, 0, 0.3)",
+          boxShadow: "var(--shadow-card)",
         }}
       >
         {/* Header row */}
@@ -1826,11 +1828,11 @@ export default function DashboardPage() {
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#38BDF8" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
               </svg>
-              <h2 style={{ fontSize: 13.5, fontWeight: 800, color: "#F8FAFC", letterSpacing: "0.03em", margin: 0 }}>
+              <h2 style={{ fontSize: 13.5, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "0.03em", margin: 0 }}>
                 ACCESS ANALYTICS – PHÂN TÍCH LƯỢT RA / VÀO
               </h2>
             </div>
-            <p style={{ fontSize: 11.5, color: "#64748B", margin: 0 }}>
+            <p style={{ fontSize: 11.5, color: "var(--text-muted)", margin: 0 }}>
               Biểu đồ tần suất nhận diện khuôn mặt theo khung giờ trong ngày
             </p>
           </div>
@@ -1838,8 +1840,8 @@ export default function DashboardPage() {
           {/* Center Summary Stats */}
           <div style={{ display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap" }}>
             <div>
-              <span style={{ fontSize: 11, color: "#64748B" }}>Cao điểm: </span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: "#F8FAFC" }}>
+              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Cao điểm: </span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)" }}>
                 {analyticsData.peak_label || "08:00 – 10:00"}
               </span>
             </div>
@@ -2065,11 +2067,11 @@ export default function DashboardPage() {
         {/* ── LEFT: LỊCH SỬ TRUY CẬP GẦN ĐÂY ── */}
         <div
           style={{
-            background: "rgba(13, 20, 36, 0.65)",
-            border: "1px solid rgba(255, 255, 255, 0.08)",
+            background: "var(--bg-card)",
+            border: "1px solid var(--border)",
             borderRadius: 14,
             padding: "16px 18px",
-            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.3)",
+            boxShadow: "var(--shadow-card)",
           }}
         >
           {/* Header */}
@@ -2078,7 +2080,7 @@ export default function DashboardPage() {
               <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#00D4AA" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
               </svg>
-              <h2 style={{ fontSize: 13, fontWeight: 800, color: "#F8FAFC", letterSpacing: "0.03em", margin: 0 }}>
+              <h2 style={{ fontSize: 13, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "0.03em", margin: 0 }}>
                 LỊCH SỬ TRUY CẬP GẦN ĐÂY
               </h2>
             </div>
@@ -2196,10 +2198,11 @@ export default function DashboardPage() {
           {/* Card 1: CẢNH BÁO AN NINH THỜI GIAN THỰC */}
           <div
             style={{
-              background: "rgba(13, 20, 36, 0.65)",
-              border: "1px solid rgba(255, 255, 255, 0.08)",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
               borderRadius: 14,
               padding: "14px 16px",
+              boxShadow: "var(--shadow-card)",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -2208,7 +2211,7 @@ export default function DashboardPage() {
                   <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
                   <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
                 </svg>
-                <h2 style={{ fontSize: 12.5, fontWeight: 800, color: "#F8FAFC", letterSpacing: "0.03em", margin: 0 }}>
+                <h2 style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "0.03em", margin: 0 }}>
                   CẢNH BÁO AN NINH THỜI GIAN THỰC
                 </h2>
               </div>
@@ -2301,10 +2304,11 @@ export default function DashboardPage() {
           {/* Card 2: TÌNH TRẠNG HỆ THỐNG (SYSTEM HEALTH) */}
           <div
             style={{
-              background: "rgba(13, 20, 36, 0.65)",
-              border: "1px solid rgba(255, 255, 255, 0.08)",
+              background: "var(--bg-card)",
+              border: "1px solid var(--border)",
               borderRadius: 14,
               padding: "14px 16px",
+              boxShadow: "var(--shadow-card)",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -2313,7 +2317,7 @@ export default function DashboardPage() {
                   <rect x="2" y="2" width="20" height="8" rx="2" ry="2" /><rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
                   <line x1="6" y1="6" x2="6.01" y2="6" /><line x1="6" y1="18" x2="6.01" y2="18" />
                 </svg>
-                <h2 style={{ fontSize: 12.5, fontWeight: 800, color: "#F8FAFC", letterSpacing: "0.03em", margin: 0 }}>
+                <h2 style={{ fontSize: 12.5, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "0.03em", margin: 0 }}>
                   TÌNH TRẠNG HỆ THỐNG (SYSTEM HEALTH)
                 </h2>
               </div>

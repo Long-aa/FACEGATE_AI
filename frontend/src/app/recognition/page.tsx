@@ -342,17 +342,27 @@ export default function RecognitionPage() {
     setCameraError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: 1280, height: 720 },
+        video: {
+          width: { ideal: 1280, min: 640 },
+          height: { ideal: 720, min: 480 },
+          facingMode: "user",
+          frameRate: { ideal: 30, min: 15 },
+        },
+        audio: false,
       });
       webcamStreamRef.current = stream;
+      setUseWebcam(true);
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        try {
+          await videoRef.current.play();
+        } catch (e) {
+          console.warn("Video play error:", e);
+        }
         if (pipelineRef.current) {
           pipelineRef.current.setVideoElement(videoRef.current);
         }
       }
-      setUseWebcam(true);
       toast.success("Đã kết nối Webcam AI thành công! Bắt đầu nhận diện thời gian thực.", "CAMERA ONLINE");
     } catch (err: any) {
       console.error("Cannot access webcam:", err);
@@ -361,6 +371,19 @@ export default function RecognitionPage() {
       toast.error("Không thể truy cập Webcam của thiết bị. Vui lòng cấp quyền trong trình duyệt.", "CAMERA OFFLINE");
     }
   };
+
+  // Ensure video element and pipeline are bound immediately when useWebcam is active
+  useEffect(() => {
+    if (useWebcam && videoRef.current && webcamStreamRef.current) {
+      if (videoRef.current.srcObject !== webcamStreamRef.current) {
+        videoRef.current.srcObject = webcamStreamRef.current;
+        videoRef.current.play().catch(console.warn);
+      }
+      if (pipelineRef.current) {
+        pipelineRef.current.setVideoElement(videoRef.current);
+      }
+    }
+  }, [useWebcam]);
 
   const stopWebcam = () => {
     if (animFrameIdRef.current) {
@@ -609,13 +632,13 @@ export default function RecognitionPage() {
   const bboxColor = getBboxColor();
 
   return (
-    <div style={{ display: "flex", height: "100vh", background: "#080C14", overflow: "hidden" }}>
+    <div style={{ display: "flex", height: "100vh", background: "var(--bg-primary)", overflow: "hidden" }}>
       <Sidebar />
 
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
         <TopBar />
 
-        <main style={{ flex: 1, overflowY: "auto", padding: "20px 24px 40px", background: "#080C14" }}>
+        <main style={{ flex: 1, overflowY: "auto", padding: "20px 24px 40px", background: "var(--bg-primary)" }}>
           {/* ─────────────────────────────────────────────────────────────────── */}
           {/* 1. Page Header & Actions Bar                                        */}
           {/* ─────────────────────────────────────────────────────────────────── */}
@@ -839,15 +862,25 @@ export default function RecognitionPage() {
                     transition: "transform 0.3s ease",
                   }}
                 >
-                  {useWebcam ? (
-                    <video
-                      ref={videoRef}
-                      autoPlay
-                      playsInline
-                      muted
-                      style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }}
-                    />
-                  ) : activeChannel?.status === "ONLINE" ? (
+                  {/* Always render video element so videoRef.current is permanently attached and accessible */}
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    style={{
+                      position: "absolute",
+                      inset: 0,
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                      transform: "scaleX(-1)",
+                      display: useWebcam ? "block" : "none",
+                      zIndex: 2,
+                    }}
+                  />
+
+                  {!useWebcam && (activeChannel?.status === "ONLINE" ? (
                     <div
                       style={{
                         position: "absolute",
@@ -940,7 +973,7 @@ export default function RecognitionPage() {
                         Bật Webcam máy tính để kiểm tra trực tiếp
                       </button>
                     </div>
-                  )}
+                  ))}
 
                   {/* Dark surveillance tint & scanlines */}
                   <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse at center, rgba(10,20,35,0.05) 0%, rgba(5,10,20,0.65) 100%)", pointerEvents: "none" }} />
