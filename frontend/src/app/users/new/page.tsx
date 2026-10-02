@@ -279,7 +279,7 @@ export default function NewUserPage() {
   // ── Form state ──────────────────────────────────────────────────────────
   const [form, setForm] = useState({
     name: "",
-    employeeId: `EMP-${Math.floor(2000 + Math.random() * 999)}`,
+    employeeId: `EMP-${Math.floor(1000 + Math.random() * 9000)}`,
     email: "",
     phone: "",
     department: "Khối Kỹ thuật & R&D",
@@ -310,6 +310,12 @@ export default function NewUserPage() {
         setDepartmentsList(res.items.map((d: any) => d.name));
       }
     }).catch(() => {});
+
+    api.users.nextEmployeeId().then((res) => {
+      if (res && res.employee_id) {
+        setForm(f => ({ ...f, employeeId: res.employee_id }));
+      }
+    }).catch(() => {});
   }, []);
 
   // Avatar & Webcam capture state
@@ -335,8 +341,9 @@ export default function NewUserPage() {
   };
 
   const generateNewEmpId = () => {
-    const newId = `EMP-${Math.floor(2000 + Math.random() * 999)}`;
+    const newId = `EMP-${Math.floor(1000 + Math.random() * 9000)}`;
     setForm(f => ({ ...f, employeeId: newId }));
+    notify.info(`Đã làm mới mã nhân viên tự động: ${newId} (Trường tiếp tục bị khóa)`);
     if (errors.employeeId) {
       setErrors(prev => {
         const copy = { ...prev };
@@ -627,18 +634,81 @@ export default function NewUserPage() {
 
                   {/* Mã nhân viên (IT01-003) */}
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <label style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>Mã nhân viên *</label>
-                      <span onClick={generateNewEmpId} style={{ fontSize: 11, color: "var(--accent-blue)", cursor: "pointer", fontWeight: 600 }}>
-                        Tạo mã tự động
-                      </span>
+                      <button
+                        type="button"
+                        onClick={generateNewEmpId}
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          fontSize: 11,
+                          color: "var(--accent-blue)",
+                          cursor: "pointer",
+                          fontWeight: 600,
+                          padding: 0,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 4
+                        }}
+                        title="Tạo lại mã tự động ngẫu nhiên định dạng EMP-xxxx"
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
+                        Tạo mã tự động khác
+                      </button>
                     </div>
                     <div style={{ position: "relative" }}>
                       <input
-                        value={form.employeeId} onChange={e => set("employeeId", e.target.value)}
-                        style={{ ...inp, background: "rgba(0,114,255,0.05)", border: errors.employeeId ? "1px solid #ef4444" : "1px solid rgba(0,114,255,0.3)", color: "var(--accent-blue)", fontWeight: 600 }}
+                        readOnly
+                        tabIndex={-1}
+                        value={form.employeeId}
+                        onChange={() => {}}
+                        onKeyDown={(e) => {
+                          if (e.key !== "Tab") {
+                            e.preventDefault();
+                            notify.warning("Mã nhân viên tự tạo dạng EMP-xxxx và trường bị khóa, không thể nhập hoặc chỉnh sửa trực tiếp!");
+                          }
+                        }}
+                        placeholder="EMP-xxxx"
+                        title="Mã nhân viên tự tạo dạng EMP-xxxx và trường bị khóa (không thể nhập trực tiếp)"
+                        style={{
+                          ...inp,
+                          background: "rgba(0,114,255,0.06)",
+                          border: errors.employeeId ? "1px solid #ef4444" : "1px dashed rgba(0,114,255,0.4)",
+                          color: "var(--accent-blue)",
+                          fontWeight: 700,
+                          letterSpacing: "0.05em",
+                          cursor: "not-allowed",
+                          paddingRight: 105,
+                          userSelect: "none"
+                        }}
                       />
-                      <svg style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", color: "var(--accent-blue)" }} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                      <div
+                        style={{
+                          position: "absolute",
+                          right: 10,
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 5,
+                          background: "rgba(0,114,255,0.12)",
+                          border: "1px solid rgba(0,114,255,0.25)",
+                          borderRadius: 6,
+                          padding: "3px 8px",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: "var(--accent-blue)",
+                          pointerEvents: "none"
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                        ĐÃ KHÓA
+                      </div>
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 5 }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                      Mã được hệ thống tự cấp phát dạng EMP-xxxx (trường bị khóa, người dùng không thể can thiệp).
                     </div>
                     {errors.employeeId && <span style={{ fontSize: 11, color: "#ef4444" }}>{errors.employeeId}</span>}
                   </div>

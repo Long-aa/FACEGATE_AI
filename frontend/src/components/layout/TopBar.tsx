@@ -18,6 +18,7 @@ interface NavigationSearchItem {
 
 const SYSTEM_NAV_ITEMS: NavigationSearchItem[] = [
   { title: "Nhận diện khuôn mặt thời gian thực", category: "Giám sát AI", path: "/recognition", icon: "📹", desc: "Giám sát camera AI và xác thực người dùng" },
+  { title: "Đăng ký khuôn mặt nhân viên", category: "Sinh trắc học", path: "/face-registration", icon: "👤", desc: "Chụp ảnh, trích xuất đặc trưng và đăng ký Face ID" },
   { title: "Quản lý người dùng & Face ID", category: "Nhân sự", path: "/users", icon: "👥", desc: "Danh sách nhân viên, dữ liệu khuôn mặt và quyền hạn" },
   { title: "Kiểm soát Cửa & Relay", category: "Cửa & Khóa", path: "/doors", icon: "🚪", desc: "Trạng thái khóa, mở khẩn cấp và phân quyền cửa" },
   { title: "Quản lý thiết bị Camera", category: "Thiết bị", path: "/cameras", icon: "🎥", desc: "Cấu hình 07 luồng RTSP camera an ninh" },
@@ -482,6 +483,35 @@ export function TopBar() {
                   <div style={{ flex: 1 }}>
                     <div>Quản lý 07 luồng Camera RTSP</div>
                     <div style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 400 }}>Cấu hình IP, góc nhìn và thông số kỹ thuật</div>
+                  </div>
+                  <span>→</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    router.push("/face-registration");
+                    setActiveMenu(null);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    padding: "10px 12px",
+                    background: isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.03)",
+                    border: `1px solid ${isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)"}`,
+                    borderRadius: 9,
+                    color: "var(--text-primary)",
+                    fontSize: 12.5,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <span>👤</span>
+                  <div style={{ flex: 1 }}>
+                    <div>Đăng ký khuôn mặt nhân viên</div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 400 }}>Thu nạp Face ID qua Webcam hoặc Camera RTSP</div>
                   </div>
                   <span>→</span>
                 </button>

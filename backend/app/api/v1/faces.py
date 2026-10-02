@@ -64,6 +64,104 @@ class EnrollFaceRequest(BaseModel):
     notes: Optional[str] = None
 
 
+def _validate_precheck_employee(employee_id: Optional[str], db: Session) -> dict:
+    # 1. Format check: Empty or whitespace (IT02-01)
+    if not employee_id or not employee_id.strip():
+        return {
+            "valid": False,
+            "reason": "EMPTY_ID",
+            "message": "Mã nhân viên không được để trống",
+        }
+
+    clean_id = employee_id.strip()
+
+    # 2. Format check: Regex standard (IT02-02)
+    if not re.match(r"^EMP-[A-Za-z0-9\-_]{2,26}$", clean_id) or "@" in clean_id:
+        return {
+            "valid": False,
+            "reason": "FORMAT_INVALID",
+            "message": "Định dạng mã nhân viên không hợp lệ",
+        }
+
+    # 3. Existence check in Database (IT02-03)
+    user = db.query(User).filter(User.employee_id == clean_id).first()
+    if not user:
+        return {
+            "valid": False,
+            "reason": "USER_NOT_FOUND",
+            "message": "Không tìm thấy nhân viên",
+        }
+
+    # 4. Active status check from Database (IT02-05)
+    if user.status in ("LOCKED", "BLOCKED", "INACTIVE"):
+        return {
+            "valid": False,
+            "reason": "ACCOUNT_LOCKED",
+            "message": "Nhân viên đang ở trạng thái ngừng hoạt động/bị khóa",
+            "employee_id": user.employee_id,
+            "user_name": user.full_name,
+            "full_name": user.full_name,
+            "department": user.department or "Khối Vận hành",
+            "position": user.position or "Nhân viên",
+            "status": user.status,
+            "face_enrolled": False,
+        }
+
+    # 5. Check existing face profile in Database (IT02-04)
+    existing_profile = db.query(FaceProfile).filter(
+        FaceProfile.employee_id == user.employee_id,
+        FaceProfile.status == "ACTIVE",
+    ).first()
+    has_prior_face = bool(existing_profile and existing_profile.has_vector())
+    if has_prior_face:
+        return {
+            "valid": False,
+            "already_enrolled": True,
+            "reason": "ALREADY_ENROLLED",
+            "message": "Nhân viên đã đăng ký khuôn mặt trước đó",
+            "id": user.id,
+            "employee_id": user.employee_id,
+            "user_name": user.full_name,
+            "full_name": user.full_name,
+            "department": user.department or "Khối Vận hành",
+            "position": user.position or "Nhân viên",
+            "role": user.role or user.position or "Nhân viên",
+            "email": user.email,
+            "phone": user.phone,
+            "avatar_url": user.avatar_url,
+            "status": user.status,
+            "face_enrolled": True,
+        }
+
+    # 6. Employee is valid and ready for camera capture
+    return {
+        "valid": True,
+        "already_enrolled": False,
+        "message": f"Hồ sơ nhân viên '{user.full_name}' hợp lệ, sẵn sàng thu nạp dữ liệu khuôn mặt.",
+        "id": user.id,
+        "employee_id": user.employee_id,
+        "user_name": user.full_name,
+        "full_name": user.full_name,
+        "department": user.department or "Khối Vận hành",
+        "position": user.position or "Nhân viên",
+        "role": user.role or user.position or "Nhân viên",
+        "email": user.email,
+        "phone": user.phone,
+        "avatar_url": user.avatar_url,
+        "status": user.status,
+        "face_enrolled": False,
+    }
+
+
+@router.get("/pre-check")
+def pre_check_enrollment_query(
+    employee_id: Optional[str] = Query(None, description="Employee ID to pre-check"),
+    db: Session = Depends(get_db),
+) -> Any:
+    """Pre-check employee via query parameter (supports empty strings for IT02-01)."""
+    return _validate_precheck_employee(employee_id, db)
+
+
 @router.get("/pre-check/{employee_id}")
 def pre_check_enrollment(
     employee_id: str,
@@ -71,56 +169,76 @@ def pre_check_enrollment(
 ) -> Any:
     """
     Step 3 Pre-condition verification before starting face enrollment:
-    1. Employee ID format verification.
-    2. Employee existence in database.
-    3. Employee active status check (not locked/inactive).
-    4. Prior Face ID registration detection.
+    1. Employee ID format verification (IT02-01, IT02-02).
+    2. Employee existence in database (IT02-03).
+    3. Employee active status check (IT02-05).
+    4. Prior Face ID registration detection (IT02-04).
     """
-    # 1. Format check
-    if not re.match(r"^[A-Za-z0-9\-_]{3,30}$", employee_id.strip()):
-        return {
-            "valid": False,
-            "reason": "FORMAT_INVALID",
-            "message": f"Mã nhân viên '{employee_id}' không đúng định dạng (3-30 ký tự chữ, số, gạch ngang).",
-        }
+    return _validate_precheck_employee(employee_id, db)
 
-    # 2. Existence check
-    user = db.query(User).filter(User.employee_id == employee_id.strip()).first()
-    if not user:
-        return {
-            "valid": False,
-            "reason": "USER_NOT_FOUND",
-            "message": f"Không tìm thấy nhân viên với mã '{employee_id}' trong cơ sở dữ liệu.",
-        }
 
-    # 3. Active status check
-    if user.status in ("LOCKED", "BLOCKED", "INACTIVE"):
-        return {
-            "valid": False,
-            "reason": "ACCOUNT_LOCKED",
-            "message": f"Tài khoản của nhân sự '{user.full_name}' đang ở trạng thái '{user.status}' (bị khóa). Không thể đăng ký Face ID!",
-            "user_name": user.full_name,
-        }
+class CameraCheckRequest(BaseModel):
+    camera_index: Optional[int] = 0
+    device_id: Optional[str] = None
+    width: Optional[int] = 1280
+    height: Optional[int] = 720
+    is_opened: Optional[bool] = True
+    permission_granted: Optional[bool] = True
+    frame_empty: Optional[bool] = False
 
-    # 4. Check existing face profile
-    existing_profile = db.query(FaceProfile).filter(
-        FaceProfile.employee_id == user.employee_id,
-        FaceProfile.status == "ACTIVE",
-    ).first()
-    has_prior_face = bool(existing_profile and existing_profile.has_vector())
+
+@router.post("/verify-camera")
+def verify_camera_feed(payload: CameraCheckRequest) -> Any:
+    """
+    Validate camera device capabilities according to IT02-06 through IT02-10:
+    - IT02-06: Chỉ số camera không hợp lệ
+    - IT02-07: Camera không được mở
+    - IT02-08: Không có quyền truy cập camera
+    - IT02-09: Camera không đọc được hình ảnh
+    - IT02-10: Độ phân giải camera không hợp lệ
+    """
+    # IT02-06: Camera index invalid
+    if payload.camera_index is None or payload.camera_index < 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Chỉ số camera không hợp lệ",
+        )
+
+    # IT02-08: Permission denied
+    if payload.permission_granted is False:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Không có quyền truy cập camera",
+        )
+
+    # IT02-07: Camera cannot open
+    if payload.is_opened is False:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Không thể mở camera",
+        )
+
+    # IT02-09: Frame empty or cannot read
+    if payload.frame_empty is True:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Không đọc được hình ảnh từ camera",
+        )
+
+    # IT02-10: Invalid resolution (< 640x480)
+    w = payload.width or 0
+    h = payload.height or 0
+    if w < 640 or h < 480:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Độ phân giải hình ảnh camera không hợp lệ",
+        )
 
     return {
-        "valid": True,
-        "already_enrolled": has_prior_face,
-        "message": (
-            f"Nhân viên '{user.full_name}' đã có dữ liệu Face ID trước đó. Quá trình tiếp tục sẽ cập nhật lại mẫu đặc trưng."
-            if has_prior_face
-            else f"Hồ sơ nhân viên '{user.full_name}' hợp lệ, sẵn sàng thu nạp dữ liệu khuôn mặt."
-        ),
-        "employee_id": user.employee_id,
-        "full_name": user.full_name,
-        "department": user.department,
-        "status": user.status,
+        "success": True,
+        "message": "Camera hoạt động bình thường và đáp ứng tiêu chuẩn",
+        "resolution": f"{w}x{h}",
+        "camera_index": payload.camera_index,
     }
 
 
@@ -195,43 +313,75 @@ async def enroll_face_profile(
 ) -> Any:
     """
     Register or update biometric face embedding vector for an employee.
-    Enforces Step 5 (Encoding validation), Step 6 (Duplicate face defense),
-    and Step 7 (Transactional profile persistence).
+    Enforces IT02-01 through IT02-10 with DB transactional persistence.
     """
-    # 1. Check User existence and status
-    user = db.query(User).filter(User.employee_id == payload.employee_id).first()
+    # 1. IT02-01: Empty or whitespace employee_id
+    if not payload.employee_id or not payload.employee_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mã nhân viên không được để trống",
+        )
+
+    clean_id = payload.employee_id.strip()
+
+    # 2. IT02-02: Format check
+    if not re.match(r"^EMP-[A-Za-z0-9\-_]{2,26}$", clean_id) or "@" in clean_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Định dạng mã nhân viên không hợp lệ",
+        )
+
+    # 3. IT02-03: Check User existence in DB
+    user = db.query(User).filter(User.employee_id == clean_id).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Không tìm thấy nhân viên với mã '{payload.employee_id}'",
+            detail="Không tìm thấy nhân viên",
         )
 
+    # 4. IT02-05: Check User status in DB
     if user.status in ("LOCKED", "BLOCKED", "INACTIVE"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Tài khoản '{user.full_name}' đang ở trạng thái '{user.status}' (bị khóa). Không thể nạp khuôn mặt.",
+            detail="Nhân viên đang ở trạng thái ngừng hoạt động/bị khóa",
         )
 
-    # 2. Validate biometric vector
+    # 5. IT02-04: Check prior active face registration in DB
+    existing_profile = db.query(FaceProfile).filter(
+        FaceProfile.employee_id == clean_id,
+        FaceProfile.status == "ACTIVE",
+    ).first()
+    if existing_profile and existing_profile.has_vector():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Nhân viên đã đăng ký khuôn mặt trước đó",
+        )
+
+    # 6. IT02-09: Frame & biometric vector validation
     if not payload.encoding_vector or len(payload.encoding_vector) < 16:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Vector đặc trưng khuôn mặt không hợp lệ hoặc dữ liệu không đủ kích thước.",
+            detail="Không đọc được hình ảnh từ camera",
         )
 
-    # Check if vector is non-zero
     vector_mag = sum(abs(x) for x in payload.encoding_vector)
     if vector_mag < 0.001:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Vector đặc trưng khuôn mặt không chứa thông tin hợp lệ (tất cả giá trị bằng 0).",
+            detail="Không đọc được hình ảnh từ camera",
         )
 
-    # 3. STEP 6: Duplicate Face Defense
-    # Compare incoming encoding with all OTHER active face profiles in DB
-    DUPLICATE_SIMILARITY_THRESHOLD = 0.72  # >= 72% cosine similarity indicates identical face
+    # 7. IT02-10: Resolution & Quality validation
+    if payload.quality_score is not None and payload.quality_score < 0.5:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Độ phân giải hình ảnh camera không hợp lệ",
+        )
+
+    # 8. Duplicate Face Defense (Compare with other active users)
+    DUPLICATE_SIMILARITY_THRESHOLD = 0.72
     other_profiles = db.query(FaceProfile).filter(
-        FaceProfile.employee_id != payload.employee_id,
+        FaceProfile.employee_id != clean_id,
         FaceProfile.status == "ACTIVE",
     ).all()
 
@@ -253,8 +403,8 @@ async def enroll_face_profile(
                     ),
                 )
 
-    # 4. STEP 7: Save Face Profile & Activate User Status
-    profile = db.query(FaceProfile).filter(FaceProfile.employee_id == payload.employee_id).first()
+    # 9. Transactional Profile Persistence
+    profile = db.query(FaceProfile).filter(FaceProfile.employee_id == clean_id).first()
     now = datetime.now(timezone.utc)
 
     if not profile:
@@ -280,14 +430,12 @@ async def enroll_face_profile(
             profile.master_photo_url = payload.master_photo_url
         profile.updated_at = now
 
-    # Also activate user status
     if user.status in ("WAITING", "DRAFT", "PENDING"):
         user.status = "ACTIVE"
 
     if payload.master_photo_url and not user.avatar_url:
         user.avatar_url = payload.master_photo_url
 
-    # Record Audit Log
     audit = AuditLog(
         action="FACE_ENROLL",
         user_id=user.id,
@@ -303,8 +451,16 @@ async def enroll_face_profile(
         },
     )
     db.add(audit)
-    db.commit()
-    db.refresh(profile)
+
+    try:
+        db.commit()
+        db.refresh(profile)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Lỗi lưu trữ dữ liệu vào CSDL. Thao tác đã được hủy (rollback).",
+        )
 
     # Broadcast Real-time WebSocket Event
     try:

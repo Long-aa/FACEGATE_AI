@@ -392,31 +392,35 @@ function EditModal({
     if (!file) return;
     setUploadingAvatar(true);
     try {
-      const res = await uploadAvatarToSupabase(file, user.employeeId || user.id);
-      if (res?.url) {
-        setForm(f => ({ ...f, avatarUrl: res.url }));
-        notify.success("Đã tải ảnh đại diện lên lưu trữ!", "TẢI ẢNH THÀNH CÔNG");
-      }
-    } catch (err: any) {
-      console.warn("Upload to Supabase failed, using base64 fallback:", err);
       const reader = new FileReader();
       reader.onload = () => {
         setForm(f => ({ ...f, avatarUrl: String(reader.result) }));
-        notify.info("Đã lưu ảnh đại diện thành công.", "ẢNH ĐẠI DIỆN");
+        notify.success("Đã chọn ảnh đại diện mới. Bấm 'Lưu thay đổi vào CSDL' để lưu trữ.", "ẢNH ĐẠI DIỆN");
       };
       reader.readAsDataURL(file);
+    } catch (err: any) {
+      notify.error("Không thể đọc tệp ảnh đã chọn!", "LỖI TẢI ẢNH");
     } finally {
       setUploadingAvatar(false);
     }
   };
 
   const handleSave = async () => {
+    if (!form.name || !form.name.trim() || form.name.trim().length < 2) {
+      notify.warning("Họ và tên người dùng phải có ít nhất 2 ký tự!", "THIẾU THÔNG TIN");
+      return;
+    }
+    if (form.email && form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      notify.warning("Địa chỉ email không đúng định dạng!", "LỖI ĐỊNH DẠNG");
+      return;
+    }
     setSaving(true);
     try {
       await onSave(form);
       onClose();
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error("Save error:", err);
+      notify.error(err?.message || "Lỗi khi lưu thông tin vào CSDL!", "LỖI LƯU TRỮ");
     } finally {
       setSaving(false);
     }
@@ -627,8 +631,30 @@ function CreateUserModal({ onClose, onCreate }: { onClose: () => void; onCreate:
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Mã NV</label>
-              <input value={form.employeeId} onChange={e => setForm(f => ({ ...f, employeeId: e.target.value }))} style={inputStyle} />
+              <label style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Mã NV (Tự tạo - Đã khóa)</label>
+              <div style={{ position: "relative" }}>
+                <input
+                  readOnly
+                  tabIndex={-1}
+                  value={form.employeeId}
+                  onChange={() => {}}
+                  title="Mã nhân viên tự tạo dạng EMP-xxxx và trường bị khóa"
+                  style={{
+                    ...inputStyle,
+                    cursor: "not-allowed",
+                    background: "rgba(0,114,255,0.06)",
+                    border: "1px dashed rgba(0,114,255,0.4)",
+                    color: "var(--accent-blue)",
+                    fontWeight: 700,
+                    letterSpacing: "0.05em",
+                    paddingRight: 80,
+                    userSelect: "none"
+                  }}
+                />
+                <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", fontSize: 10, fontWeight: 600, color: "var(--accent-blue)", background: "rgba(0,114,255,0.12)", border: "1px solid rgba(0,114,255,0.25)", padding: "2px 6px", borderRadius: 4, pointerEvents: "none" }}>
+                  🔒 ĐÃ KHÓA
+                </span>
+              </div>
             </div>
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>Số điện thoại</label>
@@ -2043,17 +2069,17 @@ export default function UsersPage() {
       if (res && Array.isArray(res.items)) {
         const mappedUsers: User[] = res.items.map((u: any) => ({
           id: u.id,
-          name: u.full_name || u.email.split("@")[0],
+          name: u.full_name || u.email?.split("@")[0] || "Nhân viên",
           employeeId: u.employee_id || u.employee_code || `EMP-${u.id.slice(0, 4).toUpperCase()}`,
           department: u.department || "Khối Kỹ thuật & R&D",
           role: u.position || u.role || "Nhân viên",
-          status: (u.status === "ACTIVE" ? "ACTIVE" : u.status === "LOCKED" || u.status === "INACTIVE" ? "LOCKED" : u.status === "WAITING" ? "WAITING" : "ACTIVE") as User["status"],
-          registeredDate: u.registered_date || (u.created_at ? new Date(u.created_at).toLocaleDateString("vi-VN") : "10/01/2026"),
+          status: (u.status === "ACTIVE" ? "ACTIVE" : u.status === "LOCKED" || u.status === "BLOCKED" || u.status === "INACTIVE" ? "LOCKED" : u.status === "WAITING" ? "WAITING" : u.status === "DRAFT" ? "DRAFT" : "ACTIVE") as User["status"],
+          registeredDate: u.registered_date || (u.created_at ? new Date(u.created_at).toLocaleDateString("vi-VN") : ""),
           faceStatus: (u.has_face_profile || u.face_status === "ok") ? "ok" : "missing",
-          email: u.email,
-          phone: u.phone || u.phone_number || "0988 234 567",
-          accessAreas: u.access_areas || ["Cửa chính Lobby", "Phòng Server Kỹ thuật"],
-          avatarUrl: u.avatar_url || (u.face_profile ? u.face_profile.master_photo_url : undefined),
+          email: u.email || "",
+          phone: u.phone || u.phone_number || "",
+          accessAreas: Array.isArray(u.access_areas) ? u.access_areas : [],
+          avatarUrl: u.avatar_url || "",
         }));
         setUsers(mappedUsers);
         setTotalCount(res.total || mappedUsers.length);
@@ -2085,24 +2111,44 @@ export default function UsersPage() {
     }
   };
 
-  const handleUpdateUser = async (patch: Partial<User>) => {
+  const handleUpdateUser = async (patch: Partial<User> & { accessAreas?: string[] }) => {
     if (!modal?.user) return;
     try {
-      await api.users.update(modal.user.id, {
-        full_name: patch.name,
-        department: patch.department,
-        position: patch.role,
-        email: patch.email,
-        phone: patch.phone,
+      const updatePayload: any = {
+        full_name: patch.name ? patch.name.trim() : undefined,
+        department: patch.department ? patch.department.trim() : undefined,
+        position: patch.role ? patch.role.trim() : undefined,
+        email: patch.email && patch.email.trim() ? patch.email.trim() : null,
+        phone: patch.phone && patch.phone.trim() ? patch.phone.trim() : null,
         status: patch.status,
-        avatar_url: patch.avatarUrl,
-      });
-      showToast(`Đã cập nhật thông tin ${patch.name || modal.user.name} vào CSDL!`, "success");
+        avatar_url: patch.avatarUrl ? patch.avatarUrl.trim() : null,
+        access_areas: patch.accessAreas || [],
+      };
+      const res = await api.users.update(modal.user.id, updatePayload);
+      showToast(`Đã cập nhật thông tin "${res.full_name || modal.user.name}" vào CSDL thành công!`, "success");
       setModal(null);
+      // Cập nhật ngay lập tức state cục bộ để giao diện gỡ/đổi ảnh phản hồi tức thì
+      setUsers(prev => prev.map(u => {
+        if (u.id === modal.user.id) {
+          return {
+            ...u,
+            name: res.full_name || u.name,
+            department: res.department || u.department,
+            role: res.position || res.role || u.role,
+            email: res.email ?? "",
+            phone: res.phone ?? "",
+            status: res.status as any,
+            avatarUrl: res.avatar_url || "",
+            accessAreas: res.access_areas || u.accessAreas,
+          };
+        }
+        return u;
+      }));
       await loadUsers();
     } catch (err: any) {
-      console.error("Failed to update user:", err);
+      console.error("Failed to update user in DB:", err);
       showToast(err?.message || "Lỗi khi cập nhật vào CSDL", "info");
+      throw err;
     }
   };
 
@@ -2179,20 +2225,19 @@ export default function UsersPage() {
         master_photo_url: photoUrl,
       });
 
-      // 4. Update user avatar
-      if (photoUrl) {
-        try {
-          await api.users.update(modal.user.id, {
-            avatar_url: photoUrl,
-          });
-        } catch (e) {
-          console.warn("Update avatar error:", e);
-        }
+      // 4. Update user avatar + kích hoạt status ACTIVE (đồng bộ với /users/enroll)
+      try {
+        await api.users.update(modal.user.id, {
+          status: "ACTIVE",
+          ...(photoUrl ? { avatar_url: photoUrl } : {}),
+        });
+      } catch (e) {
+        console.warn("Update user status/avatar error:", e);
       }
 
       const msg = storageSource === "supabase"
-        ? `Face ID của ${modal.user.name} đã được lưu trên Supabase Cloud & CSDL thành công!`
-        : `Face ID của ${modal.user.name} đã được kích hoạt thành công trong CSDL!`;
+        ? `Face ID của ${modal.user.name} đã được lưu trên Supabase Cloud & CSDL, tài khoản đã kích hoạt ACTIVE!`
+        : `Face ID của ${modal.user.name} đã được kích hoạt thành công, trạng thái ACTIVE trong CSDL!`;
 
       showToast(msg, "success");
       await loadUsers();

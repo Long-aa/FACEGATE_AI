@@ -117,6 +117,8 @@ export const api = {
       request<any[]>(`/api/v1/users/${id}/access-history?limit=${limit}`),
     getHistory: (id: string, limit = 10) =>
       request<any[]>(`/api/v1/users/${id}/access-history?limit=${limit}`),
+    nextEmployeeId: () =>
+      request<{ employee_id: string; locked: boolean }>("/api/v1/users/next-employee-id"),
   },
 
   // ── 2b. Departments ──────────────────────────────────────────
@@ -151,10 +153,14 @@ export const api = {
     list: (params: {
       q?: string;
       search?: string;
+      user_id?: string;
+      user_type?: string;
       camera_id?: string;
       door_id?: string;
       result?: string;
       status?: string;
+      confidence_min?: number;
+      confidence_max?: number;
       date_from?: string;
       date_to?: string;
       page?: number;
@@ -163,10 +169,14 @@ export const api = {
       const sp = new URLSearchParams();
       const query = params.search || params.q;
       if (query) sp.append("q", query);
-      if (params.camera_id) sp.append("camera_id", params.camera_id);
-      if (params.door_id) sp.append("door_id", params.door_id);
+      if (params.user_id && params.user_id !== "all") sp.append("user_id", params.user_id);
+      if (params.user_type && params.user_type !== "all") sp.append("user_type", params.user_type);
+      if (params.camera_id && params.camera_id !== "all") sp.append("camera_id", params.camera_id);
+      if (params.door_id && params.door_id !== "all") sp.append("door_id", params.door_id);
       const res = params.result || params.status;
-      if (res) sp.append("result", res);
+      if (res && res !== "all") sp.append("result", res);
+      if (params.confidence_min != null) sp.append("confidence_min", String(params.confidence_min));
+      if (params.confidence_max != null) sp.append("confidence_max", String(params.confidence_max));
       if (params.date_from) sp.append("date_from", params.date_from);
       if (params.date_to) sp.append("date_to", params.date_to);
       if (params.page) sp.append("page", String(params.page));
@@ -352,8 +362,23 @@ export const api = {
 
   // ── 9b. Face Profiles ─────────────────────────────────────────
   faces: {
-    preCheck: (employeeId: string) =>
-      request<any>(`/api/v1/faces/pre-check/${employeeId}`),
+    preCheck: (employeeId: string) => {
+      const encoded = encodeURIComponent(employeeId ?? "");
+      return request<any>(`/api/v1/faces/pre-check?employee_id=${encoded}`);
+    },
+    verifyCamera: (data: {
+      camera_index?: number;
+      device_id?: string;
+      width?: number;
+      height?: number;
+      is_opened?: boolean;
+      permission_granted?: boolean;
+      frame_empty?: boolean;
+    }) =>
+      request<any>("/api/v1/faces/verify-camera", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
     list: (status?: string) =>
       request<any[]>(`/api/v1/faces${status ? `?status=${status}` : ""}`),
     get: (employeeId: string) =>

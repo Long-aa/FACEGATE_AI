@@ -59,6 +59,11 @@ class FaceProfile(Base):
             return [float(x) for x in self.face_encoding_json]
         return None
 
+    def has_vector(self) -> bool:
+        """Return True if profile has valid encoding vector."""
+        vec = self.get_encoding_vector()
+        return bool(vec and len(vec) > 0)
+
     def set_encoding_vector(self, vec: List[float]):
         """Set the vector in both ARRAY and JSONB representation."""
         self.encoding = [float(x) for x in vec]

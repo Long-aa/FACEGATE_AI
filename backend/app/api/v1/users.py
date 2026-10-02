@@ -258,6 +258,23 @@ async def create_user(
     return _to_user_out(user)
 
 
+@router.get("/next-employee-id")
+def get_next_employee_id(db: Session = Depends(get_db)) -> Any:
+    """
+    Generate next available employee ID in format EMP-xxxx (read-only auto ID).
+    """
+    max_num = 1000
+    existing_emp_ids = db.query(User.employee_id).filter(User.employee_id.like("EMP-%")).all()
+    for (eid,) in existing_emp_ids:
+        m = re.match(r"^EMP-(\d+)$", eid)
+        if m:
+            num = int(m.group(1))
+            if num > max_num:
+                max_num = num
+    next_id = f"EMP-{max_num + 1:04d}"
+    return {"employee_id": next_id, "locked": True, "format": "EMP-xxxx"}
+
+
 @router.get("/{user_id}", response_model=UserOut)
 def get_user_detail(
     user_id: str,
@@ -292,10 +309,17 @@ async def update_user(
             detail="Không tìm thấy người dùng",
         )
 
-    if payload.full_name is not None:
-        user.full_name = payload.full_name.strip()
-    if payload.email is not None:
-        email = payload.email.strip() if payload.email else None
+    if "full_name" in payload.model_fields_set and payload.full_name is not None:
+        cleaned_name = payload.full_name.strip()
+        if len(cleaned_name) < 2:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Họ và tên người dùng phải có ít nhất 2 ký tự.",
+            )
+        user.full_name = cleaned_name
+
+    if "email" in payload.model_fields_set:
+        email = payload.email.strip() if payload.email and payload.email.strip() else None
         if email:
             email_pattern = r"^[\w\.\+\-]+@[\w\-]+\.[a-zA-Z]{2,}$"
             if not re.match(email_pattern, email):
@@ -304,40 +328,70 @@ async def update_user(
             if dup:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Email '{email}' đã được sử dụng.")
         user.email = email
-    if payload.phone is not None:
-        user.phone = payload.phone.strip() if payload.phone else None
-    if payload.department is not None:
-        user.department = payload.department
-    if payload.position is not None:
-        user.position = payload.position
-    if payload.role is not None:
+
+    if "phone" in payload.model_fields_set:
+        user.phone = payload.phone.strip() if payload.phone and payload.phone.strip() else None
+
+    if "department" in payload.model_fields_set:
+        user.department = payload.department.strip() if payload.department and payload.department.strip() else None
+
+    if "position" in payload.model_fields_set:
+        user.position = payload.position.strip() if payload.position and payload.position.strip() else None
+
+    if "role" in payload.model_fields_set and payload.role is not None:
         user.role = payload.role
-    if payload.status is not None:
-        user.status = payload.status
-    if payload.card_number is not None:
-        user.card_number = payload.card_number
-    if payload.avatar_url is not None:
-        user.avatar_url = payload.avatar_url
+
+    if "status" in payload.model_fields_set and payload.status is not None:
+        valid_statuses = ("ACTIVE", "WAITING", "DRAFT", "LOCKED", "INACTIVE", "BLOCKED")
+        if payload.status in valid_statuses:
+            user.status = payload.status
+
+    if "card_number" in payload.model_fields_set:
+        user.card_number = payload.card_number.strip() if payload.card_number and payload.card_number.strip() else None
+
+    if "avatar_url" in payload.model_fields_set:
+        cleaned_avatar = payload.avatar_url.strip() if payload.avatar_url and payload.avatar_url.strip() else None
+        user.avatar_url = cleaned_avatar
+        if user.face_profile:
+            user.face_profile.master_photo_url = cleaned_avatar
+
     if payload.password:
         user.hashed_password = get_password_hash(payload.password)
 
-    # Sync access areas
+    # Sync access areas into access_rules
     if payload.access_areas is not None:
         db.query(AccessRule).filter(AccessRule.user_id == user.id).delete(synchronize_session=False)
         all_doors = db.query(Door).all()
         for area_name in payload.access_areas:
-            matched_door = next((d for d in all_doors if d.name == area_name or d.id == area_name or d.door_code == area_name), None)
-            if matched_door:
-                rule = AccessRule(
-                    name=f"Quyền {matched_door.name} - {user.full_name}",
-                    user_id=user.id,
-                    door_id=matched_door.id,
-                    start_time="00:00:00",
-                    end_time="23:59:59",
-                    allowed_days=[1, 2, 3, 4, 5, 6, 7],
-                    is_active=True,
+            name_clean = area_name.strip()
+            matched_door = next((d for d in all_doors if d.name.strip().lower() == name_clean.lower() or d.id == name_clean or d.door_code.strip().lower() == name_clean.lower()), None)
+            if not matched_door:
+                # Auto-register new door if not exists
+                door_code = f"D-{len(all_doors) + 1:03d}"
+                matched_door = Door(
+                    door_code=door_code,
+                    name=name_clean,
+                    location="Khu vực tòa nhà",
+                    door_type="entrance",
+                    status="Online",
+                    lock_status="Locked",
                 )
-                db.add(rule)
+                db.add(matched_door)
+                db.flush()
+                all_doors.append(matched_door)
+
+            rule = AccessRule(
+                name=f"Quyền {matched_door.name} - {user.full_name}",
+                user_id=user.id,
+                door_id=matched_door.id,
+                start_time="00:00:00",
+                end_time="23:59:59",
+                allowed_days=[1, 2, 3, 4, 5, 6, 7],
+                is_active=True,
+            )
+            db.add(rule)
+
+    user.updated_at = datetime.now(timezone.utc)
 
     audit = AuditLog(
         action="USER_UPDATE",
@@ -348,8 +402,16 @@ async def update_user(
         details={"updated_fields": list(payload.model_dump(exclude_unset=True).keys())},
     )
     db.add(audit)
-    db.commit()
-    db.refresh(user)
+
+    try:
+        db.commit()
+        db.refresh(user)
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Lỗi khi lưu thông tin người dùng vào CSDL: {str(e)}",
+        )
 
     try:
         await ws_manager.broadcast({

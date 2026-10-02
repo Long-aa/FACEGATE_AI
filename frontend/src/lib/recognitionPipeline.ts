@@ -143,7 +143,7 @@ function dist3D(p1: { x: number; y: number; z?: number }, p2: { x: number; y: nu
 }
 
 // Helper: Compute Eye Aspect Ratio (EAR) for blink detection
-function computeEyeAspectRatio(landmarks: any[], eyeIndices: [number, number, number, number, number, number]): number {
+export function computeEyeAspectRatio(landmarks: any[], eyeIndices: [number, number, number, number, number, number]): number {
   const [p1, p2, p3, p4, p5, p6] = eyeIndices.map((idx) => landmarks[idx]);
   if (!p1 || !p2 || !p3 || !p4 || !p5 || !p6) return 0.3;
   const vertical1 = dist3D(p2, p6);
@@ -154,7 +154,7 @@ function computeEyeAspectRatio(landmarks: any[], eyeIndices: [number, number, nu
 }
 
 // Helper: Compute 3D Depth Variance to detect flat photo spoofs
-function compute3DDepthRelief(landmarks: any[]): number {
+export function compute3DDepthRelief(landmarks: any[]): number {
   // Key points across face contour & nose: 1 (nose tip), 33 (left eye), 263 (right eye), 152 (chin), 10 (forehead)
   const keyPoints = [1, 33, 263, 152, 10, 61, 291];
   const zValues = keyPoints.map((idx) => landmarks[idx]?.z || 0);

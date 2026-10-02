@@ -24,14 +24,14 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
 
   // Form Data
   const [form, setForm] = useState({
-    name: "Nguyễn Văn An",
+    name: "",
     employeeId: `EMP-${Math.floor(1000 + Math.random() * 9000)}`,
-    email: "an.nguyen@aiaccess.corp",
-    phone: "0988 234 567",
+    email: "",
+    phone: "",
     department: "Khối Kỹ thuật & R&D",
-    position: "Kỹ sư AI / Lập trình viên cao cấp",
-    rfidCode: "8A4F-C092",
-    pinCode: "123456",
+    position: "",
+    rfidCode: "",
+    pinCode: "",
     accessLevel: "rd", // "office" | "rd" | "admin"
     workSchedule: "office", // "office" | "fulltime"
   });
@@ -64,6 +64,12 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
         setDepartmentsList(res.items.map((d: any) => d.name));
       }
     }).catch((err) => console.error("Could not fetch departments for modal:", err));
+
+    api.users.nextEmployeeId().then((res) => {
+      if (res && res.employee_id) {
+        setForm((f) => ({ ...f, employeeId: res.employee_id }));
+      }
+    }).catch(() => {});
   }, []);
 
   // Camera state
@@ -96,7 +102,9 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
 
   // Auto generate employee ID
   const handleGenerateId = () => {
-    setForm((f) => ({ ...f, employeeId: `EMP-${Math.floor(1000 + Math.random() * 9000)}` }));
+    const nextCode = `EMP-${Math.floor(1000 + Math.random() * 9000)}`;
+    setForm((f) => ({ ...f, employeeId: nextCode }));
+    toast.info(`Đã làm mới mã nhân viên: ${nextCode} (Trường tiếp tục bị khóa)`, "MÃ TỰ TẠO");
   };
 
   // Change preset access levels
@@ -384,6 +392,14 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
       toast.warning("Email doanh nghiệp không đúng định dạng!", "EMAIL KHÔNG HỢP LỆ");
       return;
     }
+    // Kiểm tra SĐT khớp backend regex: ^\+?[0-9\s\.\-]{8,20}$
+    if (form.phone.trim() && !/^\+?[0-9\s\.\-]{8,20}$/.test(form.phone.trim())) {
+      toast.warning(
+        "Số điện thoại không hợp lệ. Vui lòng nhập ít nhất 8 chữ số (VD: 0988234567 hoặc +84988234567)!",
+        "SĐT KHÔNG HỢP LỆ"
+      );
+      return;
+    }
 
     setSaving(true);
     try {
@@ -442,8 +458,14 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
       toast.warning("Email doanh nghiệp không đúng định dạng!", "EMAIL KHÔNG HỢP LỆ");
       return;
     }
-
-    // 2. Kiểm tra CAMERA PHẢI ĐANG BẬT
+    // Kiểm tra SĐT khớp backend regex: ^\+?[0-9\s\.\-]{8,20}$
+    if (form.phone.trim() && !/^\+?[0-9\s\.\-]{8,20}$/.test(form.phone.trim())) {
+      toast.warning(
+        "Số điện thoại không hợp lệ. Vui lòng nhập ít nhất 8 chữ số (VD: 0988234567 hoặc +84988234567)!",
+        "SĐT KHÔNG HỢP LỆ"
+      );
+      return;
+    }
     if (!isCameraActive || !mediaStreamRef.current) {
       toast.warning(
         "Camera máy tính chưa bật! Đang kích hoạt camera webcam...",
@@ -947,24 +969,80 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
                     <label style={{ fontSize: 12, fontWeight: 600, color: "#E2E8F0" }}>
                       Mã nhân viên *
                     </label>
-                    <span
+                    <button
+                      type="button"
                       onClick={handleGenerateId}
-                      style={{ fontSize: 11, fontWeight: 600, color: "#00A3FF", cursor: "pointer" }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: "#00A3FF",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 4,
+                        padding: 0
+                      }}
+                      title="Tạo lại mã tự động ngẫu nhiên định dạng EMP-xxxx"
                     >
-                      Tạo mã tự động
-                    </span>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>
+                      Tạo mã tự động khác
+                    </button>
                   </div>
                   <div style={{ position: "relative" }}>
                     <input
                       required
+                      readOnly
+                      tabIndex={-1}
                       value={form.employeeId}
-                      onChange={(e) => setForm({ ...form, employeeId: e.target.value })}
-                      placeholder="EMP-2045"
-                      style={{ ...inputBaseStyle, paddingRight: 38 }}
+                      onChange={() => {}}
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Tab') {
+                          e.preventDefault();
+                          toast.warning("Mã nhân viên tự tạo dạng EMP-xxxx và trường bị khóa, không thể nhập hoặc chỉnh sửa trực tiếp!", "TRƯỜNG BỊ KHÓA");
+                        }
+                      }}
+                      placeholder="EMP-xxxx"
+                      title="Mã nhân viên tự tạo dạng EMP-xxxx và trường bị khóa (không thể nhập trực tiếp)"
+                      style={{
+                        ...inputBaseStyle,
+                        cursor: "not-allowed",
+                        background: "rgba(15, 23, 42, 0.6)",
+                        border: "1px dashed rgba(0, 163, 255, 0.4)",
+                        color: "#38BDF8",
+                        fontWeight: 700,
+                        letterSpacing: "0.05em",
+                        paddingRight: 105,
+                        userSelect: "none"
+                      }}
                     />
-                    <span style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", color: "#64748B", fontSize: 14 }}>
-                      🖆
-                    </span>
+                    <div
+                      style={{
+                        position: "absolute",
+                        right: 10,
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        background: "rgba(0,163,255,0.12)",
+                        border: "1px solid rgba(0,163,255,0.25)",
+                        borderRadius: 6,
+                        padding: "3px 8px",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        color: "#38BDF8",
+                        pointerEvents: "none"
+                      }}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                      ĐÃ KHÓA
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, color: "#64748B", marginTop: 4, display: "flex", alignItems: "center", gap: 5 }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                    Mã tự tạo định dạng EMP-xxxx và trường bị khóa (không thể can thiệp).
                   </div>
                 </div>
 

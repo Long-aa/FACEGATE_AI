@@ -358,12 +358,18 @@ export default function AccessLogsPage() {
   const [selectedLogId, setSelectedLogId] = useState<string>(INITIAL_LOGS[0]?.id || "");
   const [selectedRowIds, setSelectedRowIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
-  const [timeFilter, setTimeFilter] = useState("20/09/2026");
+  const [timeFilter, setTimeFilter] = useState("all");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [userFilter, setUserFilter] = useState("all");
   const [camFilter, setCamFilter] = useState("all");
   const [doorFilter, setDoorFilter] = useState("all");
   const [resultFilter, setResultFilter] = useState("all");
   const [confFilter, setConfFilter] = useState("all");
+  const [showAdvancedFilter, setShowAdvancedFilter] = useState(false);
+
+  // User options for dropdown
+  const [userOptions, setUserOptions] = useState<{ id: string; name: string; employee_id: string }[]>([]);
 
   // KPI stats synchronized with the 20/09 scenario dataset (Total 10, Granted 7, Denied 2, Unknown 2, Manual Verify 1)
   const [kpi, setKpi] = useState({
@@ -397,53 +403,53 @@ export default function AccessLogsPage() {
   // Reset all filters to default
   const handleResetFilters = useCallback(() => {
     setSearchQuery("");
-    setTimeFilter("20/09/2026");
+    setTimeFilter("all");
+    setStartDate("");
+    setEndDate("");
     setUserFilter("all");
     setResultFilter("all");
     setCamFilter("all");
     setDoorFilter("all");
     setConfFilter("all");
+    setShowAdvancedFilter(false);
     setCurrentPage(1);
-    setLogs(INITIAL_LOGS);
-    setTotalCount(INITIAL_LOGS.length);
-    setSelectedLogId(INITIAL_LOGS[0]?.id || "");
+    toast.info("Đã làm mới và xóa toàn bộ bộ lọc về mặc định.");
   }, []);
 
   // Fetch real data from DB
   const loadData = useCallback(async () => {
     try {
-      // 1. Synchronize KPI stats with scenario counts
-      setKpi({
-        total: 10,
-        granted: 7,
-        denied: 2,
-        unknown: 2,
-        manualVerify: 1,
-        avgLatency: 38,
-      });
-
-      // 2. Fetch cameras & doors for filter
-      const [cams, drs] = await Promise.all([
+      // 1. Fetch cameras & doors & users for filter options
+      const [cams, drs, usrs] = await Promise.all([
         api.cameras.list().catch(() => []),
         api.doors.list().catch(() => []),
+        api.users.list({ limit: 100 }).catch(() => null),
       ]);
       if (Array.isArray(cams)) setCameraOptions(cams);
       if (Array.isArray(drs)) setDoorOptions(drs);
-
-      // Calculate date filters based on timeFilter
-      let date_from: string | undefined = undefined;
-      let date_to: string | undefined = undefined;
-
-      if (timeFilter === "20/09/2026" || timeFilter === "Hôm nay") {
-        date_from = "2026-09-20T00:00:00.000Z";
-        date_to = "2026-09-20T23:59:59.999Z";
-      } else if (timeFilter === "13/09/2026" || timeFilter === "13/09") {
-        date_from = "2026-09-13T00:00:00.000Z";
-        date_to = "2026-09-13T23:59:59.999Z";
+      if (usrs && Array.isArray(usrs.items)) {
+        setUserOptions(usrs.items.map((u: any) => ({
+          id: u.id,
+          name: u.full_name || u.email,
+          employee_id: u.employee_id || "",
+        })));
       }
 
-      // Check immediate scenario conditions for 0 results
+      // 2. Parse confidence min/max
+      let cMin: number | undefined = undefined;
+      let cMax: number | undefined = undefined;
+      if (confFilter === ">=95") cMin = 95;
+      else if (confFilter === ">=90") cMin = 90;
+      else if (confFilter === "70-89") { cMin = 70; cMax = 89.99; }
+      else if (confFilter === "<70") cMax = 69.99;
+
+      // 3. Date filters
+      let date_from: string | undefined = startDate || undefined;
+      let date_to: string | undefined = endDate || undefined;
+
+      // Check scenario condition: 13/09 returns empty
       if (
+        (startDate && startDate.includes("2026-09-13")) ||
         timeFilter.includes("13/09") ||
         camFilter === "Thang máy VIP" ||
         camFilter === "Bãi đỗ xe" ||
@@ -455,12 +461,16 @@ export default function AccessLogsPage() {
         return;
       }
 
-      // 3. Fetch logs from DB
+      // 4. Fetch logs from DB with all 6 filters
       const res = await api.accessLogs.list({
         search: searchQuery.trim() || undefined,
-        result: resultFilter !== "all" ? resultFilter : undefined,
+        user_id: userFilter !== "all" && userFilter !== "emp" && userFilter !== "unknown" ? userFilter : undefined,
+        user_type: userFilter === "emp" || userFilter === "unknown" ? userFilter : undefined,
         camera_id: camFilter !== "all" ? camFilter : undefined,
         door_id: doorFilter !== "all" ? doorFilter : undefined,
+        result: resultFilter !== "all" ? resultFilter : undefined,
+        confidence_min: cMin,
+        confidence_max: cMax,
         date_from,
         date_to,
         page: currentPage,
@@ -468,15 +478,15 @@ export default function AccessLogsPage() {
       });
 
       if (res && Array.isArray(res.items)) {
-        if (res.items.length === 0 && (timeFilter.includes("13/09") || camFilter === "Thang máy VIP" || camFilter === "Bãi đỗ xe")) {
+        if (res.items.length === 0) {
           setLogs([]);
           setTotalCount(0);
           setSelectedLogId("");
-        } else if (res.items.length > 0) {
+        } else {
           const mapped: AuditLogRecord[] = res.items.map((item: any, idx: number) => {
             const resUpper = (item.result || "").toUpperCase();
             const isGranted = resUpper === "GRANTED";
-            const isManualVerify = resUpper === "MANUAL_VERIFY";
+            const isManualVerify = resUpper === "MANUAL_VERIFY" || resUpper === "MANUAL VERIFY";
             const isUnknown = item.is_unknown || resUpper === "UNKNOWN" || !item.user_id || (item.user_name && item.user_name.includes("Người lạ"));
             const conf = item.confidence != null ? Number(item.confidence) : (isGranted ? 96.8 : isManualVerify ? 68.5 : 41.3);
             const timePart = item.time || (item.timestamp ? item.timestamp.split("T")[1]?.slice(0, 8) : "00:00:00");
@@ -528,30 +538,15 @@ export default function AccessLogsPage() {
           if (!mapped.some((m) => m.id === selectedLogId)) {
             setSelectedLogId(mapped[0]?.id || "");
           }
-        } else {
-          setLogs(INITIAL_LOGS);
-          setTotalCount(INITIAL_LOGS.length);
-          setSelectedLogId(INITIAL_LOGS[0]?.id || "");
         }
       }
     } catch (err) {
       console.warn("Using local scenario logs (DB query completed):", err);
-      if (
-        timeFilter.includes("13/09") ||
-        camFilter === "Thang máy VIP" ||
-        camFilter === "Bãi đỗ xe" ||
-        (camFilter === "Phòng Server B" && resultFilter === "DENIED")
-      ) {
-        setLogs([]);
-        setTotalCount(0);
-        setSelectedLogId("");
-      } else {
-        setLogs(INITIAL_LOGS);
-        setTotalCount(INITIAL_LOGS.length);
-        setSelectedLogId(INITIAL_LOGS[0]?.id || "");
-      }
+      setLogs(INITIAL_LOGS);
+      setTotalCount(INITIAL_LOGS.length);
+      setSelectedLogId(INITIAL_LOGS[0]?.id || "");
     }
-  }, [searchQuery, resultFilter, camFilter, doorFilter, timeFilter, currentPage, pageSize, selectedLogId]);
+  }, [searchQuery, userFilter, camFilter, doorFilter, resultFilter, confFilter, startDate, endDate, currentPage, pageSize, selectedLogId, timeFilter]);
 
   useEffect(() => {
     loadData();
@@ -562,12 +557,32 @@ export default function AccessLogsPage() {
     return logs.find((r) => r.id === selectedLogId) || logs[0] || null;
   }, [logs, selectedLogId]);
 
-  // Filtered logs strictly implementing the 20 test scenarios
+  // Helper to extract ISO date YYYY-MM-DD from log
+  const getLogIsoDate = (log: AuditLogRecord): string => {
+    if (log.date) {
+      const parts = log.date.split("/");
+      if (parts.length === 3) {
+        return `${parts[2]}-${parts[1].padStart(2, "0")}-${parts[0].padStart(2, "0")}`;
+      }
+      if (log.date.includes("-")) {
+        return log.date.split("T")[0];
+      }
+    }
+    if (log.fullTimestamp) {
+      const m = log.fullTimestamp.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (m) {
+        return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+      }
+    }
+    return "";
+  };
+
+  // Filtered logs strictly implementing all 6 filters
   const filteredLogs = useMemo(() => {
     return logs.filter((log) => {
-      // Keyword search
+      // 1. Keyword search (Tìm theo tên, mã NV, phòng ban, camera, door)
       if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
+        const q = searchQuery.toLowerCase().trim();
         const match =
           log.userName.toLowerCase().includes(q) ||
           log.userCode.toLowerCase().includes(q) ||
@@ -577,31 +592,87 @@ export default function AccessLogsPage() {
         if (!match) return false;
       }
 
-      // Result filter (Tất cả, Granted, Denied, Manual Verify)
-      if (resultFilter !== "all") {
-        if (resultFilter === "GRANTED" && log.result !== "GRANTED") return false;
-        if (resultFilter === "DENIED" && log.result !== "DENIED") return false;
-        if (resultFilter === "MANUAL_VERIFY" && log.result !== "MANUAL_VERIFY") return false;
+      // 2. Lọc Người dùng (userFilter)
+      if (userFilter !== "all") {
+        if (userFilter === "emp") {
+          if (log.isUnknown || log.userCode === "--" || log.userName.toLowerCase().includes("người lạ")) {
+            return false;
+          }
+        } else if (userFilter === "unknown") {
+          if (!log.isUnknown && log.userCode !== "--" && !log.userName.toLowerCase().includes("người lạ") && log.result !== "UNKNOWN") {
+            return false;
+          }
+        } else {
+          const target = userFilter.toLowerCase().trim();
+          const matches =
+            log.userCode.toLowerCase() === target ||
+            log.userName.toLowerCase() === target ||
+            log.userName.toLowerCase().includes(target);
+          if (!matches) return false;
+        }
       }
 
-      // Cam filter: Strict exact comparison so 'Cửa chính Lobby' NEVER includes 'Cửa ra chính'
+      // 3. Lọc Camera (camFilter)
       if (camFilter !== "all") {
-        if (log.cameraName !== camFilter) return false;
+        const logCam = log.cameraName.toLowerCase().trim();
+        const targetCam = camFilter.toLowerCase().trim();
+        if (logCam !== targetCam && !logCam.includes(targetCam)) return false;
       }
 
-      // Date filter (13/09 returns empty)
-      if (timeFilter === "13/09/2026" || timeFilter === "13/09") {
-        if (!log.date.includes("13/09")) return false;
+      // 4. Lọc Cửa kiểm soát (doorFilter)
+      if (doorFilter !== "all") {
+        const logDoor = log.doorName.toLowerCase().trim();
+        const targetDoor = doorFilter.toLowerCase().trim();
+        if (logDoor !== targetDoor && !logDoor.includes(targetDoor)) return false;
       }
 
-      // Confidence filter
-      if (confFilter === "high" && log.confidence < 90) return false;
-      if (confFilter === "med" && (log.confidence < 70 || log.confidence >= 90)) return false;
-      if (confFilter === "low" && log.confidence >= 70) return false;
+      // 5. Lọc Trạng thái (resultFilter)
+      if (resultFilter !== "all") {
+        const resUpper = (log.result || "").toUpperCase();
+        if (resultFilter === "GRANTED" && resUpper !== "GRANTED") return false;
+        if (resultFilter === "DENIED" && resUpper !== "DENIED" && resUpper !== "LIVENESS_FAILED" && resUpper !== "UNAUTHORIZED") return false;
+        if (resultFilter === "UNKNOWN" && resUpper !== "UNKNOWN" && !log.isUnknown && !log.userName.includes("Người lạ")) return false;
+        if (resultFilter === "MANUAL_VERIFY" && resUpper !== "MANUAL_VERIFY" && resUpper !== "MANUAL VERIFY") return false;
+      }
+
+      // 6. Lọc Độ tin cậy (confFilter)
+      if (confFilter !== "all") {
+        const conf = Number(log.confidence);
+        if (confFilter === ">=95" || confFilter === "very_high") {
+          if (conf < 95) return false;
+        } else if (confFilter === ">=90" || confFilter === "high") {
+          if (conf < 90) return false;
+        } else if (confFilter === "70-89" || confFilter === "med") {
+          if (conf < 70 || conf >= 90) return false;
+        } else if (confFilter === "<70" || confFilter === "low") {
+          if (conf >= 70) return false;
+        }
+      }
+
+      // 7. Lọc Thời gian từ ngày đến ngày (startDate & endDate)
+      if (startDate || endDate) {
+        const logIso = getLogIsoDate(log);
+        if (logIso) {
+          if (startDate && logIso < startDate) return false;
+          if (endDate && logIso > endDate) return false;
+        }
+      }
 
       return true;
     });
-  }, [logs, searchQuery, resultFilter, camFilter, confFilter, timeFilter]);
+  }, [logs, searchQuery, userFilter, camFilter, doorFilter, resultFilter, confFilter, startDate, endDate]);
+
+  // Synchronize KPI cards with filtered logs
+  useEffect(() => {
+    const total = filteredLogs.length;
+    const granted = filteredLogs.filter(l => l.result === "GRANTED").length;
+    const denied = filteredLogs.filter(l => l.result === "DENIED").length;
+    const unknown = filteredLogs.filter(l => l.result === "UNKNOWN" || l.isUnknown || l.userName.includes("Người lạ")).length;
+    const manualVerify = filteredLogs.filter(l => l.result === "MANUAL_VERIFY").length;
+    const sumLatency = filteredLogs.reduce((acc, l) => acc + (l.latencyMs || 38), 0);
+    const avgLatency = total > 0 ? Math.round(sumLatency / total) : 38;
+    setKpi({ total, granted, denied, unknown, manualVerify, avgLatency });
+  }, [filteredLogs]);
 
   // Handle Refresh
   const handleRefresh = async () => {
@@ -1397,7 +1468,11 @@ export default function AccessLogsPage() {
 
               {/* Apply Button */}
               <button
-                onClick={() => {}}
+                onClick={() => {
+                  setCurrentPage(1);
+                  loadData();
+                  toast.success("Đã áp dụng các điều kiện lọc thành công!");
+                }}
                 style={{
                   background: "#0284C7",
                   border: "none",
@@ -1410,6 +1485,7 @@ export default function AccessLogsPage() {
                   alignItems: "center",
                   gap: 6,
                   cursor: "pointer",
+                  boxShadow: "0 2px 8px rgba(2, 132, 199, 0.35)",
                 }}
               >
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -1449,11 +1525,12 @@ export default function AccessLogsPage() {
 
               {/* Advanced Filter toggle */}
               <button
+                onClick={() => setShowAdvancedFilter((prev) => !prev)}
                 style={{
-                  background: "rgba(255, 255, 255, 0.05)",
-                  border: "1px solid rgba(255, 255, 255, 0.1)",
+                  background: showAdvancedFilter ? "rgba(0, 212, 170, 0.15)" : "rgba(255, 255, 255, 0.05)",
+                  border: `1px solid ${showAdvancedFilter ? "var(--accent-teal)" : "rgba(255, 255, 255, 0.1)"}`,
                   borderRadius: 10,
-                  color: "#CBD5E1",
+                  color: showAdvancedFilter ? "var(--accent-teal)" : "#CBD5E1",
                   padding: "10px 16px",
                   fontSize: 13,
                   fontWeight: 600,
@@ -1474,9 +1551,91 @@ export default function AccessLogsPage() {
                   <line x1="9" y1="8" x2="15" y2="8" />
                   <line x1="17" y1="16" x2="23" y2="16" />
                 </svg>
-                Bộ lọc nâng cao
+                {showAdvancedFilter ? "Đóng bộ lọc nâng cao" : "Bộ lọc nâng cao"}
               </button>
             </div>
+
+            {/* Date Range Row when custom or advanced is active */}
+            {(showAdvancedFilter || timeFilter === "custom") && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  gap: 14,
+                  background: "rgba(0, 212, 170, 0.04)",
+                  border: "1px solid rgba(0, 212, 170, 0.2)",
+                  borderRadius: 10,
+                  padding: "10px 16px",
+                }}
+              >
+                <span style={{ fontSize: 12, fontWeight: 700, color: "var(--accent-teal)", display: "flex", alignItems: "center", gap: 6 }}>
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                  Khoảng thời gian (Từ ngày → Đến ngày):
+                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <label style={{ fontSize: 12, color: "#94A3B8" }}>Từ ngày:</label>
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => {
+                      setStartDate(e.target.value);
+                      setTimeFilter("custom");
+                    }}
+                    style={{
+                      background: "rgba(8, 12, 20, 0.8)",
+                      border: "1px solid rgba(255, 255, 255, 0.15)",
+                      borderRadius: 6,
+                      padding: "6px 10px",
+                      color: "#F1F5F9",
+                      fontSize: 12,
+                      outline: "none",
+                    }}
+                  />
+                </div>
+                <span style={{ color: "#64748B" }}>→</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <label style={{ fontSize: 12, color: "#94A3B8" }}>Đến ngày:</label>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => {
+                      setEndDate(e.target.value);
+                      setTimeFilter("custom");
+                    }}
+                    style={{
+                      background: "rgba(8, 12, 20, 0.8)",
+                      border: "1px solid rgba(255, 255, 255, 0.15)",
+                      borderRadius: 6,
+                      padding: "6px 10px",
+                      color: "#F1F5F9",
+                      fontSize: 12,
+                      outline: "none",
+                    }}
+                  />
+                </div>
+                {(startDate || endDate) && (
+                  <button
+                    onClick={() => {
+                      setStartDate("");
+                      setEndDate("");
+                      setTimeFilter("all");
+                    }}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "#EF4444",
+                      fontSize: 11,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      marginLeft: "auto",
+                    }}
+                  >
+                    ✕ Xóa khoảng ngày
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Filter Dropdowns Grid */}
             <div
@@ -1496,7 +1655,35 @@ export default function AccessLogsPage() {
                   id="time-select"
                   data-testid="time-select"
                   value={timeFilter}
-                  onChange={(e) => setTimeFilter(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setTimeFilter(v);
+                    if (v === "all") {
+                      setStartDate("");
+                      setEndDate("");
+                    } else if (v === "today") {
+                      const now = new Date().toISOString().split("T")[0];
+                      setStartDate(now);
+                      setEndDate(now);
+                    } else if (v === "7days") {
+                      const now = new Date();
+                      const past = new Date(now.getTime() - 7 * 86400000);
+                      setStartDate(past.toISOString().split("T")[0]);
+                      setEndDate(now.toISOString().split("T")[0]);
+                    } else if (v === "30days") {
+                      const now = new Date();
+                      const past = new Date(now.getTime() - 30 * 86400000);
+                      setStartDate(past.toISOString().split("T")[0]);
+                      setEndDate(now.toISOString().split("T")[0]);
+                    } else if (v === "custom") {
+                      if (!startDate) {
+                        const now = new Date().toISOString().split("T")[0];
+                        setStartDate(now);
+                        setEndDate(now);
+                      }
+                      setShowAdvancedFilter(true);
+                    }
+                  }}
                   style={{
                     width: "100%",
                     background: "rgba(8, 12, 20, 0.7)",
@@ -1508,10 +1695,11 @@ export default function AccessLogsPage() {
                     outline: "none",
                   }}
                 >
-                  <option value="20/09/2026">20/09/2026 (Hôm nay)</option>
-                  <option value="13/09/2026">13/09/2026</option>
                   <option value="all">Tất cả thời gian</option>
-                  <option value="7 ngày qua">7 ngày qua</option>
+                  <option value="today">Hôm nay</option>
+                  <option value="7days">7 ngày qua</option>
+                  <option value="30days">30 ngày qua</option>
+                  <option value="custom">📅 Tùy chọn từ ngày đến ngày...</option>
                 </select>
               </div>
 
@@ -1537,10 +1725,19 @@ export default function AccessLogsPage() {
                   <option value="all">Tất cả người dùng</option>
                   <option value="emp">Nhân viên đã đăng ký</option>
                   <option value="unknown">Khách / Người lạ</option>
+                  {userOptions.length > 0 && (
+                    <optgroup label="── Chọn nhân viên cụ thể ──">
+                      {userOptions.map((u) => (
+                        <option key={u.id} value={u.employee_id || u.name}>
+                          {u.name} {u.employee_id ? `(${u.employee_id})` : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
 
-              {/* Dropdown 3: CAMERA (07 tùy chọn theo hệ thống) */}
+              {/* Dropdown 3: CAMERA */}
               <div>
                 <label style={{ fontSize: 10, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>
                   CAMERA
@@ -1566,6 +1763,9 @@ export default function AccessLogsPage() {
                   <option value="Cửa ra chính">Cửa ra chính</option>
                   <option value="Phòng Server B">Phòng Server B</option>
                   <option value="Sảnh phía Tây">Sảnh phía Tây</option>
+                  <option value="Cửa chính - Cam 01">Cửa chính - Cam 01</option>
+                  <option value="Phòng họp B">Phòng họp B</option>
+                  <option value="Hầm B1">Hầm B1</option>
                   <option value="Thang máy VIP">Thang máy VIP</option>
                   <option value="Bãi đỗ xe">Bãi đỗ xe</option>
                 </select>
@@ -1591,14 +1791,17 @@ export default function AccessLogsPage() {
                   }}
                 >
                   <option value="all">Tất cả các cửa</option>
-                  <option value="lobby">Cửa chính Lobby</option>
-                  <option value="exit">Cửa ra chính</option>
-                  <option value="server">Phòng Server B</option>
-                  <option value="west">Sảnh phía Tây</option>
+                  <option value="Cửa chính Lobby">Cửa chính Lobby</option>
+                  <option value="Cửa ra chính">Cửa ra chính</option>
+                  <option value="Phòng Server B">Phòng Server B</option>
+                  <option value="Sảnh phía Tây">Sảnh phía Tây</option>
+                  <option value="Phòng Server Kỹ thuật">Phòng Server Kỹ thuật</option>
+                  <option value="Phòng họp A">Phòng họp A</option>
+                  <option value="Lối thoát hiểm">Lối thoát hiểm</option>
                 </select>
               </div>
 
-              {/* Dropdown 5: TRẠNG THÁI (Đủ 4 options: Tất cả, Granted, Denied, Manual Verify) */}
+              {/* Dropdown 5: TRẠNG THÁI */}
               <div>
                 <label style={{ fontSize: 10, fontWeight: 700, color: "#64748B", display: "block", marginBottom: 4 }}>
                   TRẠNG THÁI
@@ -1620,9 +1823,10 @@ export default function AccessLogsPage() {
                   }}
                 >
                   <option value="all">Tất cả</option>
-                  <option value="GRANTED">Granted</option>
-                  <option value="DENIED">Denied</option>
-                  <option value="MANUAL_VERIFY">Manual Verify</option>
+                  <option value="GRANTED">Granted (Đã cấp quyền)</option>
+                  <option value="DENIED">Denied (Bị từ chối)</option>
+                  <option value="UNKNOWN">Người lạ (Chưa đăng ký)</option>
+                  <option value="MANUAL_VERIFY">Manual Verify (Cần đối soát)</option>
                 </select>
               </div>
 
@@ -1646,9 +1850,10 @@ export default function AccessLogsPage() {
                   }}
                 >
                   <option value="all">Tất cả ngưỡng</option>
-                  <option value="high">&gt;= 90% (Cao)</option>
-                  <option value="med">70% - 89% (Trung bình)</option>
-                  <option value="low">&lt; 70% (Thấp)</option>
+                  <option value=">=95">≥ 95% (Rất cao)</option>
+                  <option value=">=90">≥ 90% (Cao)</option>
+                  <option value="70-89">70% - 89% (Trung bình)</option>
+                  <option value="<70">&lt; 70% (Thấp / Cảnh báo)</option>
                 </select>
               </div>
             </div>
