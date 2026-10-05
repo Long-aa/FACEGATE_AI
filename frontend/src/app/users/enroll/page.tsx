@@ -153,6 +153,9 @@ export default function EnrollPage() {
   const capturedVectorRef = useRef<number[] | null>(null);
   // Last valid landmarks for final vector extraction
   const lastLandmarksRef = useRef<Array<{ x: number; y: number; z: number }> | null>(null);
+  // Specifically retain the 0° straight frontal vector & landmarks for optimal recognition
+  const frontalVectorRef = useRef<number[] | null>(null);
+  const frontalLandmarksRef = useRef<Array<{ x: number; y: number; z: number }> | null>(null);
 
   // Synchronize total frames
   const totalFrames = poseCounts.reduce((sum, n) => sum + n, 0);
@@ -481,7 +484,14 @@ export default function EnrollPage() {
           // Cập nhật landmarks mới nhất mỗi frame để lấy vector thực chất lượng cao
           lastLandmarksRef.current = landmarks;
           // Extract biometric vector sample (128-D thực từ MediaPipe landmarks)
-          capturedVectorRef.current = extractGeometricFaceVector(landmarks);
+          const currentVec = extractGeometricFaceVector(landmarks);
+          capturedVectorRef.current = currentVec;
+
+          // Lưu giữ vector góc nhìn thẳng chính diện chuẩn 0 độ để làm master profile vector
+          if (activePoseIdx === 0) {
+            frontalVectorRef.current = currentVec;
+            frontalLandmarksRef.current = landmarks;
+          }
 
           // Throttle collection to ~130ms per valid frame
           if (nowMs - lastCaptureTimeRef.current >= 130) {
@@ -569,14 +579,16 @@ export default function EnrollPage() {
     try {
       const empId = user?.employeeId || "EMP-2045";
 
-      // ── Lấy vector 128-D thực từ landmarks MediaPipe (đồng bộ với FaceEnrollModal) ──
+      // ── Lấy vector 128-D thực từ landmarks MediaPipe (ưu tiên tuyệt đối vector chính diện frontal 0°) ──
       let faceVector: number[] = [];
-      const storedLandmarks = lastLandmarksRef.current;
-      if (storedLandmarks && storedLandmarks.length >= 468) {
-        faceVector = extractGeometricFaceVector(storedLandmarks);
-      }
-      if (capturedVectorRef.current && capturedVectorRef.current.length === 128) {
+      if (frontalVectorRef.current && frontalVectorRef.current.length === 128) {
+        faceVector = frontalVectorRef.current;
+      } else if (frontalLandmarksRef.current && frontalLandmarksRef.current.length >= 468) {
+        faceVector = extractGeometricFaceVector(frontalLandmarksRef.current);
+      } else if (capturedVectorRef.current && capturedVectorRef.current.length === 128) {
         faceVector = capturedVectorRef.current;
+      } else if (lastLandmarksRef.current && lastLandmarksRef.current.length >= 468) {
+        faceVector = extractGeometricFaceVector(lastLandmarksRef.current);
       }
 
       // Fallback: nếu không có landmarks thực thì sinh vector deterministic 128-D (không phải seed sin/cos)

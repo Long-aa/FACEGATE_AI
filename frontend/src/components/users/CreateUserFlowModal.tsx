@@ -96,6 +96,8 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
   const [selectedCamId, setSelectedCamId] = useState<string>("");
   const animationFrameRef = useRef<number | null>(null);
   const lastLandmarksRef = useRef<any[] | null>(null);
+  const frontalLandmarksRef = useRef<any[] | null>(null);
+  const frontalVectorRef = useRef<number[] | null>(null);
   const [equalizerHeights, setEqualizerHeights] = useState<number[]>([
     40, 65, 80, 50, 90, 75, 45, 60, 85, 95, 70, 55, 80, 60, 45, 90, 75, 50, 65, 85, 95, 60, 75, 50, 70, 85, 45, 65
   ]);
@@ -284,6 +286,10 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
         setHeadPoseAnalysis(frame);
         if (frame.landmarks && frame.landmarks.length >= 468) {
           lastLandmarksRef.current = frame.landmarks;
+          if (activePoseIdx === 0) {
+            frontalLandmarksRef.current = frame.landmarks;
+            frontalVectorRef.current = extractGeometricFaceVector(frame.landmarks);
+          }
         }
 
         if (enrollFrames < 30) {
@@ -496,9 +502,11 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
       return;
     }
 
-    const landmarks = lastLandmarksRef.current || headPoseAnalysis?.landmarks;
+    const landmarks = frontalLandmarksRef.current || lastLandmarksRef.current || headPoseAnalysis?.landmarks;
     let faceVector: number[] = [];
-    if (landmarks && landmarks.length >= 468) {
+    if (frontalVectorRef.current && frontalVectorRef.current.length === 128) {
+      faceVector = frontalVectorRef.current;
+    } else if (landmarks && landmarks.length >= 468) {
       faceVector = extractGeometricFaceVector(landmarks);
     }
 

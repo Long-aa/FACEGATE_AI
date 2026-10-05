@@ -4,11 +4,13 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { api } from "@/lib/api";
+import { toast } from "@/components/ui/ToastNotification";
 import { useRealtimeEvents, RealtimeEventPayload } from "@/lib/useRealtimeEvents";
 import {
   RecognitionPipelineController,
   FaceBoundingBox,
   FrameAnalysis,
+  PipelineState,
 } from "@/lib/recognitionPipeline";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -328,6 +330,8 @@ export default function DashboardPage() {
   const [dynamicBbox, setDynamicBbox] = useState<FaceBoundingBox | null>(null);
   const [detectedName, setDetectedName] = useState<string>("Đang quét...");
   const [detectedConfidence, setDetectedConfidence] = useState<number>(0);
+  const [pipelineState, setPipelineState] = useState<PipelineState>("IDLE");
+  const [statusText, setStatusText] = useState<string>("");
   const pipelineRef = useRef<RecognitionPipelineController | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
@@ -553,6 +557,21 @@ export default function DashboardPage() {
           if (d.door_unlocked) {
             setIsLocked(false);
             setDoorTimer(d.auto_lock_seconds || 10);
+            setToastData({
+              name: d.user_name,
+              location: d.door_name || "Cửa chính",
+              time: d.time,
+            });
+            setShowToast(true);
+            setTimeout(() => setShowToast(false), 5000);
+          } else {
+            setIsLocked(true);
+            if (d.result === "UNKNOWN") {
+              toast.warning(
+                "Phát hiện người chưa đăng ký tại camera. Cửa tiếp tục khóa an toàn (Fail-Safe).",
+                "CẢNH BÁO: NGƯỜI CHƯA ĐĂNG KÝ"
+              );
+            }
           }
 
           // Update KPI stats dynamically
@@ -581,6 +600,10 @@ export default function DashboardPage() {
               ...prev,
               unresolved_alerts: (prev.unresolved_alerts || 0) + 1,
             }));
+            toast.warning(
+              newAlert.description || "Phát hiện khuôn mặt chưa đăng ký trong hệ thống!",
+              newAlert.alert_type || newAlert.title || "CẢNH BÁO AN NINH"
+            );
           }
         }
       },
@@ -703,17 +726,23 @@ export default function DashboardPage() {
           try {
             const analysis: FrameAnalysis = await pipelineRef.current.processFrame();
             setDynamicBbox(analysis.boundingBox);
+            setPipelineState(analysis.state);
+            setStatusText(analysis.statusText);
             if (analysis.verificationResult) {
               setDetectedName(analysis.verificationResult.userName);
               setDetectedConfidence(analysis.verificationResult.confidence);
-              if (analysis.verificationResult.result === "GRANTED") {
+              if (analysis.verificationResult.result === "GRANTED" && analysis.verificationResult.doorUnlocked) {
                 setIsLocked(false);
                 setDoorTimer(analysis.verificationResult.autoLockSeconds || 10);
+              } else {
+                setIsLocked(true);
               }
             } else if (analysis.faceCount === 0) {
               setDynamicBbox(null);
               setDetectedName("Đang chờ khuôn mặt...");
               setDetectedConfidence(0);
+              setPipelineState("WAITING_FOR_FACE");
+              setStatusText("Vui lòng nhìn vào camera để nhận diện");
             }
           } catch {}
         }
@@ -1196,53 +1225,106 @@ export default function DashboardPage() {
                   muted
                   style={{ width: "100%", height: "100%", objectFit: "cover", transform: "scaleX(-1)" }}
                 />
-                {dynamicBbox && (
-                  <div
-                    style={{
-                      position: "absolute",
-                      left: `${(1 - dynamicBbox.x - dynamicBbox.width) * 100}%`,
-                      top: `${dynamicBbox.y * 100}%`,
-                      width: `${dynamicBbox.width * 100}%`,
-                      height: `${dynamicBbox.height * 100}%`,
-                      border: `2px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`,
-                      boxShadow: `0 0 15px ${!isLocked ? "rgba(34, 197, 94, 0.4)" : "rgba(56, 189, 248, 0.4)"}`,
-                      pointerEvents: "none",
-                      zIndex: 10,
-                      transition: "all 0.05s linear",
-                    }}
-                  >
-                    <span style={{ position: "absolute", top: -2, left: -2, width: 10, height: 10, borderTop: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`, borderLeft: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}` }} />
-                    <span style={{ position: "absolute", top: -2, right: -2, width: 10, height: 10, borderTop: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`, borderRight: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}` }} />
-                    <span style={{ position: "absolute", bottom: -2, left: -2, width: 10, height: 10, borderBottom: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`, borderLeft: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}` }} />
-                    <span style={{ position: "absolute", bottom: -2, right: -2, width: 10, height: 10, borderBottom: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`, borderRight: `3px solid ${!isLocked ? "#22C55E" : "#38BDF8"}` }} />
-                    
+                {dynamicBbox && (() => {
+                  const isSuccess = pipelineState === "AUTHORIZED" || pipelineState === "DOOR_OPEN" || (!isLocked && detectedConfidence > 60);
+                  const isDanger = pipelineState === "UNKNOWN" || pipelineState === "DENIED" || detectedName.toLowerCase().includes("chưa đăng ký") || detectedName.toLowerCase().includes("unknown");
+                  const isWarn = pipelineState === "MULTIPLE_FACES" || pipelineState === "LIVENESS_CHECK";
+                  const bboxColor = isSuccess ? "#22C55E" : isDanger ? "#EF4444" : isWarn ? "#F59E0B" : "#38BDF8";
+
+                  return (
                     <div
                       style={{
                         position: "absolute",
-                        bottom: "100%",
-                        left: "50%",
-                        transform: "translateX(-50%)",
-                        marginBottom: 4,
-                        background: "rgba(10, 20, 36, 0.95)",
-                        border: `1px solid ${!isLocked ? "#22C55E" : "#38BDF8"}`,
-                        borderRadius: 4,
-                        padding: "2px 6px",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 5,
-                        whiteSpace: "nowrap",
+                        left: `${(1 - dynamicBbox.x - dynamicBbox.width) * 100}%`,
+                        top: `${dynamicBbox.y * 100}%`,
+                        width: `${dynamicBbox.width * 100}%`,
+                        height: `${dynamicBbox.height * 100}%`,
+                        border: `2px solid ${bboxColor}`,
+                        boxShadow: `0 0 16px ${bboxColor}66`,
+                        pointerEvents: "none",
+                        zIndex: 10,
+                        transition: "all 0.05s linear",
                       }}
                     >
-                      <span style={{ width: 4, height: 4, borderRadius: "50%", background: !isLocked ? "#22C55E" : "#38BDF8" }} />
-                      <span style={{ fontSize: 9.5, fontWeight: 700, color: "#F8FAFC" }}>{detectedName}</span>
-                      {detectedConfidence > 0 && (
-                        <span style={{ fontSize: 9, fontWeight: 800, color: !isLocked ? "#22C55E" : "#38BDF8", fontFamily: "monospace" }}>
-                          {detectedConfidence.toFixed(1)}%
+                      <span style={{ position: "absolute", top: -2, left: -2, width: 10, height: 10, borderTop: `3px solid ${bboxColor}`, borderLeft: `3px solid ${bboxColor}` }} />
+                      <span style={{ position: "absolute", top: -2, right: -2, width: 10, height: 10, borderTop: `3px solid ${bboxColor}`, borderRight: `3px solid ${bboxColor}` }} />
+                      <span style={{ position: "absolute", bottom: -2, left: -2, width: 10, height: 10, borderBottom: `3px solid ${bboxColor}`, borderLeft: `3px solid ${bboxColor}` }} />
+                      <span style={{ position: "absolute", bottom: -2, right: -2, width: 10, height: 10, borderBottom: `3px solid ${bboxColor}`, borderRight: `3px solid ${bboxColor}` }} />
+                      
+                      <div
+                        style={{
+                          position: "absolute",
+                          bottom: "100%",
+                          left: "50%",
+                          transform: "translateX(-50%)",
+                          marginBottom: 4,
+                          background: "rgba(10, 20, 36, 0.95)",
+                          border: `1px solid ${bboxColor}`,
+                          borderRadius: 4,
+                          padding: "2px 7px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        <span style={{ width: 5, height: 5, borderRadius: "50%", background: bboxColor, boxShadow: `0 0 6px ${bboxColor}` }} />
+                        <span style={{ fontSize: 10, fontWeight: 800, color: "#F8FAFC" }}>
+                          {isDanger ? "✕ Người chưa đăng ký (Unknown)" : detectedName}
                         </span>
-                      )}
+                        {detectedConfidence > 0 && (
+                          <span style={{ fontSize: 9.5, fontWeight: 800, color: bboxColor, fontFamily: "monospace" }}>
+                            {detectedConfidence.toFixed(1)}%
+                          </span>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
+
+                {/* Status HUD Banner for live webcam */}
+                {statusText && (() => {
+                  const isSuccess = pipelineState === "AUTHORIZED" || pipelineState === "DOOR_OPEN";
+                  const isDanger = pipelineState === "UNKNOWN" || pipelineState === "DENIED";
+                  const isWarn = pipelineState === "MULTIPLE_FACES" || pipelineState === "LIVENESS_CHECK";
+                  const bannerColor = isSuccess ? "#22C55E" : isDanger ? "#EF4444" : isWarn ? "#F59E0B" : "#38BDF8";
+
+                  return (
+                    <div
+                      style={{
+                        position: "absolute",
+                        bottom: 12,
+                        left: "50%",
+                        transform: "translateX(-50%)",
+                        background: "rgba(9, 14, 26, 0.92)",
+                        border: `1px solid ${bannerColor}`,
+                        boxShadow: `0 0 20px ${bannerColor}33`,
+                        borderRadius: 20,
+                        padding: "5px 14px",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        zIndex: 15,
+                        whiteSpace: "nowrap",
+                        backdropFilter: "blur(8px)",
+                        pointerEvents: "none",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 7,
+                          height: 7,
+                          borderRadius: "50%",
+                          background: bannerColor,
+                          boxShadow: `0 0 8px ${bannerColor}`,
+                        }}
+                      />
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#F8FAFC" }}>
+                        {statusText}
+                      </span>
+                    </div>
+                  );
+                })()}
               </>
             ) : (
               <div

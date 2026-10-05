@@ -64,7 +64,7 @@ def list_users(
     department: Optional[str] = Query(None, description="Filter by department"),
     status: Optional[str] = Query(None, description="Filter by status (ACTIVE, WAITING, DRAFT, LOCKED)"),
     page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(5, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> Any:
     """

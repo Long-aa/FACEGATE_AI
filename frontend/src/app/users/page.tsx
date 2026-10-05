@@ -739,6 +739,8 @@ function FaceEnrollModal({
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const lastLandmarksRef = useRef<any[] | null>(null);
+  const frontalLandmarksRef = useRef<any[] | null>(null);
+  const frontalVectorRef = useRef<number[] | null>(null);
 
   // List available video cameras
   const listCameras = async () => {
@@ -899,6 +901,10 @@ function FaceEnrollModal({
         setHeadPoseAnalysis(frame);
         if (frame.landmarks && frame.landmarks.length >= 468) {
           lastLandmarksRef.current = frame.landmarks;
+          if (activePoseIdx === 0) {
+            frontalLandmarksRef.current = frame.landmarks;
+            frontalVectorRef.current = extractGeometricFaceVector(frame.landmarks);
+          }
         }
 
         if (step === "scanning" && enrollFrames < 30) {
@@ -1010,9 +1016,11 @@ function FaceEnrollModal({
   const handleFinish = async () => {
     setSaving(true);
     try {
-      const landmarks = lastLandmarksRef.current || headPoseAnalysis?.landmarks;
+      const landmarks = frontalLandmarksRef.current || lastLandmarksRef.current || headPoseAnalysis?.landmarks;
       let faceVector: number[] = [];
-      if (landmarks && landmarks.length >= 468) {
+      if (frontalVectorRef.current && frontalVectorRef.current.length === 128) {
+        faceVector = frontalVectorRef.current;
+      } else if (landmarks && landmarks.length >= 468) {
         faceVector = extractGeometricFaceVector(landmarks);
       }
 
@@ -2002,6 +2010,7 @@ const inputStyle: React.CSSProperties = { padding: "10px 14px", background: "var
 
 // ─── Main page ───────────────────────────────────────────────────────────────
 export default function UsersPage() {
+  const PAGE_SIZE = 5;
   const [users, setUsers] = useState<User[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
@@ -2063,7 +2072,7 @@ export default function UsersPage() {
         department: selectedDept !== "all" ? selectedDept : undefined,
         status: selectedStatus !== "all" ? selectedStatus : undefined,
         page: currentPage,
-        limit: 10,
+        limit: PAGE_SIZE,
       });
 
       if (res && Array.isArray(res.items)) {
@@ -2082,8 +2091,14 @@ export default function UsersPage() {
           avatarUrl: u.avatar_url || "",
         }));
         setUsers(mappedUsers);
-        setTotalCount(res.total || mappedUsers.length);
-        setPages(res.pages || 1);
+        const total = typeof res.total === "number" ? res.total : mappedUsers.length;
+        setTotalCount(total);
+        const calculatedPages = res.total_pages || Math.ceil(total / PAGE_SIZE) || 1;
+        setPages(calculatedPages);
+
+        if (currentPage > calculatedPages && calculatedPages >= 1) {
+          setCurrentPage(calculatedPages);
+        }
       }
     } catch (err) {
       console.error("Failed to load users from DB:", err);
@@ -2326,17 +2341,17 @@ export default function UsersPage() {
           <div style={{ background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px", display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", boxShadow: "var(--shadow-card)" }}>
             <div style={{ position: "relative", flex: 1, minWidth: 200 }}>
               <svg style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></svg>
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Tìm kiếm tên hoặc Mã NV trong CSDL..." style={{ ...inputStyle, paddingLeft: 36 }} />
+              <input value={search} onChange={(e) => { setSearch(e.target.value); setCurrentPage(1); }} placeholder="Tìm kiếm tên hoặc Mã NV trong CSDL..." style={{ ...inputStyle, paddingLeft: 36 }} />
             </div>
             {[
               { val: selectedDept, set: setSelectedDept, opts: ["all:Tất cả phòng ban", ...departmentsList.map(d => `${d}:${d}`)] },
               { val: selectedStatus, set: setSelectedStatus, opts: ["all:Tất cả trạng thái", "ACTIVE:Đang hoạt động", "WAITING:Chờ nạp Face", "LOCKED:Đã khóa"] },
             ].map(({ val, set, opts }, idx) => (
-              <select key={idx} value={val} onChange={(e) => set(e.target.value)} style={{ ...inputStyle, minWidth: 160, width: "auto" }}>
+              <select key={idx} value={val} onChange={(e) => { set(e.target.value); setCurrentPage(1); }} style={{ ...inputStyle, minWidth: 160, width: "auto" }}>
                 {opts.map(o => { const [v, l] = o.split(":"); return <option key={v} value={v}>{l}</option>; })}
               </select>
             ))}
-            <button onClick={() => { setSearch(""); setSelectedDept("all"); setSelectedStatus("all"); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "var(--bg-secondary)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", whiteSpace: "nowrap" }}>
+            <button onClick={() => { setSearch(""); setSelectedDept("all"); setSelectedStatus("all"); setCurrentPage(1); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "var(--bg-secondary)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", whiteSpace: "nowrap" }}>
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
               Xóa bộ lọc
             </button>
@@ -2433,23 +2448,67 @@ export default function UsersPage() {
               </table>
             </div>
             {/* Pagination */}
-            <div style={{ padding: "14px 20px", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(255,255,255,0.01)" }}>
-              <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
-                Hiển thị <strong style={{ color: "var(--text-primary)" }}>{users.length}</strong> trong số <strong style={{ color: "var(--text-primary)" }}>{totalCount}</strong> người dùng trong CSDL
-              </span>
-              <div style={{ display: "flex", gap: 6 }}>
+            <div style={{ padding: "14px 20px", borderTop: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(255,255,255,0.01)", flexWrap: "wrap", gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
+                  Hiển thị{" "}
+                  <strong style={{ color: "var(--text-primary)" }}>
+                    {totalCount === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1} - {Math.min(currentPage * PAGE_SIZE, totalCount)}
+                  </strong>{" "}
+                  trong số <strong style={{ color: "var(--text-primary)" }}>{totalCount}</strong> người dùng trong CSDL
+                </span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 600,
+                    padding: "3px 9px",
+                    borderRadius: 6,
+                    background: "rgba(0, 198, 255, 0.08)",
+                    color: "var(--accent-teal, #00C6FF)",
+                    border: "1px solid rgba(0, 198, 255, 0.25)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 5,
+                  }}
+                >
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#00C6FF", display: "inline-block" }} />
+                  5 bản ghi / trang
+                </span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <button
+                  disabled={currentPage <= 1}
+                  onClick={() => setCurrentPage(1)}
+                  title="Trang đầu tiên"
+                  style={{ minWidth: 32, height: 32, padding: "0 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.02)", color: currentPage <= 1 ? "rgba(255,255,255,0.2)" : "var(--text-secondary)", fontSize: 12, fontWeight: 600, cursor: currentPage <= 1 ? "not-allowed" : "pointer" }}
+                >
+                  « Đầu
+                </button>
                 <button
                   disabled={currentPage <= 1}
                   onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.02)", color: "var(--text-secondary)", fontSize: 13, cursor: currentPage <= 1 ? "not-allowed" : "pointer" }}
+                  title="Trang trước"
+                  style={{ minWidth: 32, height: 32, padding: "0 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.02)", color: currentPage <= 1 ? "rgba(255,255,255,0.2)" : "var(--text-secondary)", fontSize: 12, fontWeight: 600, cursor: currentPage <= 1 ? "not-allowed" : "pointer" }}
                 >
-                  ‹
+                  ‹ Trước
                 </button>
                 {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
                   <button
                     key={p}
                     onClick={() => setCurrentPage(p)}
-                    style={{ width: 32, height: 32, borderRadius: 8, border: p === currentPage ? "none" : "1px solid rgba(255,255,255,0.1)", background: p === currentPage ? "linear-gradient(135deg,#00C6FF,#0072FF)" : "rgba(255,255,255,0.02)", color: p === currentPage ? "white" : "var(--text-secondary)", fontSize: 13, cursor: "pointer", fontWeight: p === currentPage ? 600 : 400 }}
+                    style={{
+                      width: 32,
+                      height: 32,
+                      borderRadius: 8,
+                      border: p === currentPage ? "1px solid rgba(0, 198, 255, 0.4)" : "1px solid rgba(255,255,255,0.1)",
+                      background: p === currentPage ? "linear-gradient(135deg, #00C6FF, #0072FF)" : "rgba(255,255,255,0.02)",
+                      color: p === currentPage ? "#FFFFFF" : "var(--text-secondary)",
+                      fontSize: 13,
+                      cursor: "pointer",
+                      fontWeight: p === currentPage ? 700 : 500,
+                      boxShadow: p === currentPage ? "0 2px 10px rgba(0, 198, 255, 0.35)" : "none",
+                      transition: "all 0.15s ease",
+                    }}
                   >
                     {p}
                   </button>
@@ -2457,9 +2516,18 @@ export default function UsersPage() {
                 <button
                   disabled={currentPage >= totalPages}
                   onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                  style={{ width: 32, height: 32, borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.02)", color: "var(--text-secondary)", fontSize: 13, cursor: currentPage >= totalPages ? "not-allowed" : "pointer" }}
+                  title="Trang kế tiếp"
+                  style={{ minWidth: 32, height: 32, padding: "0 10px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.02)", color: currentPage >= totalPages ? "rgba(255,255,255,0.2)" : "var(--text-secondary)", fontSize: 12, fontWeight: 600, cursor: currentPage >= totalPages ? "not-allowed" : "pointer" }}
                 >
-                  ›
+                  Sau ›
+                </button>
+                <button
+                  disabled={currentPage >= totalPages}
+                  onClick={() => setCurrentPage(totalPages)}
+                  title="Trang cuối cùng"
+                  style={{ minWidth: 32, height: 32, padding: "0 9px", borderRadius: 8, border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.02)", color: currentPage >= totalPages ? "rgba(255,255,255,0.2)" : "var(--text-secondary)", fontSize: 12, fontWeight: 600, cursor: currentPage >= totalPages ? "not-allowed" : "pointer" }}
+                >
+                  Cuối »
                 </button>
               </div>
             </div>

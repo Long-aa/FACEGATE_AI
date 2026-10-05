@@ -295,6 +295,12 @@ export default function RecognitionPage() {
             setDoorSeconds(d.auto_lock_seconds || 10);
           } else {
             setDoorOpen(false);
+            if (d.result === "UNKNOWN") {
+              toast.warning(
+                "Phát hiện người chưa đăng ký tại camera. Cửa tiếp tục khóa an toàn (Fail-Safe).",
+                "CẢNH BÁO: NGƯỜI CHƯA ĐĂNG KÝ"
+              );
+            }
           }
 
           // Update stats count
@@ -311,6 +317,14 @@ export default function RecognitionPage() {
             setDoorSeconds(event.data.duration || 10);
           } else {
             setDoorSeconds(0);
+          }
+        } else if (event.type === "ALERT_NEW") {
+          const newAlert = event.data;
+          if (newAlert) {
+            toast.warning(
+              newAlert.description || "Phát hiện khuôn mặt chưa đăng ký trong hệ thống!",
+              newAlert.alert_type || newAlert.title || "CẢNH BÁO AN NINH"
+            );
           }
         }
       },

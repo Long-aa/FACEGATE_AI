@@ -13,6 +13,7 @@
 
 import { FilesetResolver, FaceLandmarker } from "@mediapipe/tasks-vision";
 import { api } from "@/lib/api";
+import { toast } from "@/components/ui/ToastNotification";
 
 export type PipelineState =
   | "IDLE"
@@ -440,10 +441,11 @@ export class RecognitionPipelineController {
     }
 
     // 2. "người không xác định thì gửi cảnh báo về hệ thống 5s một lần"
-    if (this.state === "UNKNOWN" && now - this.lastUnknownAlertTime < 5000) {
+    // Keep real face tracking bounding box active while throttling API calls
+    if (this.state === "UNKNOWN" && now - this.lastUnknownAlertTime < 2500) {
       emptyAnalysis.verificationResult = this.lastVerificationResult;
       emptyAnalysis.state = "UNKNOWN";
-      emptyAnalysis.statusText = "✕ NGƯỜI KHÔNG XÁC ĐỊNH • CỬA TIẾP TỤC KHÓA (Cảnh báo 5s/lần)";
+      emptyAnalysis.statusText = "✕ CẢNH BÁO: KHUÔN MẶT CHƯA ĐĂNG KÝ • CỬA TIẾP TỤC KHÓA (FAIL-SAFE)";
       return emptyAnalysis;
     }
 
@@ -463,7 +465,62 @@ export class RecognitionPipelineController {
           face_count: 1,
         });
 
-        // Add to multi-frame sliding window
+        if (verifyResp.result === "UNKNOWN") {
+          // Immediately enter UNKNOWN state: Red bounding box & Warning Banner (Fail-Safe)
+          this.state = "UNKNOWN";
+          emptyAnalysis.state = "UNKNOWN";
+          emptyAnalysis.statusText = "✕ CẢNH BÁO: KHUÔN MẶT CHƯA ĐĂNG KÝ • CỬA TIẾP TỤC KHÓA (FAIL-SAFE)";
+          this.predictionQueue = [];
+
+          this.lastVerificationResult = {
+            result: "UNKNOWN",
+            confidence: verifyResp.confidence,
+            userName: verifyResp.user_name || "Người chưa đăng ký (Unknown)",
+            employeeId: undefined,
+            department: "Khách vãng lai",
+            doorName: verifyResp.door_name,
+            cameraName: verifyResp.camera_name,
+            doorUnlocked: false,
+            autoLockSeconds: verifyResp.auto_lock_seconds || 10,
+            livenessPassed: verifyResp.liveness_passed,
+            message: verifyResp.message || "Khuôn mặt chưa được đăng ký trong hệ thống. Cửa tiếp tục khóa (Fail-Safe).",
+            logId: verifyResp.log_id,
+            timestamp: verifyResp.timestamp,
+          };
+          emptyAnalysis.verificationResult = this.lastVerificationResult;
+
+          // User requirement: "người không xác định thì gửi cảnh báo về hệ thống 5s một lần"
+          const shouldAlert = now - this.lastUnknownAlertTime >= 5000 || this.lastUnknownAlertTime === 0;
+          if (shouldAlert) {
+            this.lastUnknownAlertTime = now;
+            this.activeRecognizedUser = null;
+            this.hasAlertedRecognizedUser = false;
+            try {
+              const AudioCtx = typeof window !== "undefined" ? (window.AudioContext || (window as any).webkitAudioContext) : null;
+              if (AudioCtx) {
+                const ctx = new AudioCtx();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(520, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(320, ctx.currentTime + 0.25);
+                gain.gain.setValueAtTime(0.12, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.25);
+              }
+            } catch {}
+            toast.warning(
+              "Phát hiện người chưa đăng ký khuôn mặt trong hệ thống! Cửa khóa an toàn (Fail-Safe).",
+              "CẢNH BÁO: NGƯỜI CHƯA ĐĂNG KÝ (UNKNOWN)"
+            );
+          }
+          return emptyAnalysis;
+        }
+
+        // Add registered face prediction to multi-frame sliding window
         this.predictionQueue.push({
           userName: verifyResp.user_name,
           employeeId: verifyResp.employee_id || null,
@@ -504,11 +561,6 @@ export class RecognitionPipelineController {
             // "người đúng có hiện tên và chỉ gửi cảnh báo về hệ thống 1 lần"
             this.activeRecognizedUser = verifyResp.employee_id;
             this.hasAlertedRecognizedUser = true;
-          } else if (verifyResp.result === "UNKNOWN") {
-            // "người không xác định thì gửi cảnh báo về hệ thống 5s một lần"
-            this.lastUnknownAlertTime = now;
-            this.activeRecognizedUser = null;
-            this.hasAlertedRecognizedUser = false;
           }
 
           if (verifyResp.result === "GRANTED" && verifyResp.door_unlocked) {
@@ -516,19 +568,24 @@ export class RecognitionPipelineController {
             this.state = "DOOR_OPEN";
             emptyAnalysis.statusText = `✓ XÁC THỰC THÀNH CÔNG • ${verifyResp.user_name} • CỬA ĐÃ MỞ`;
             this.startAutoLockCountdown(verifyResp.auto_lock_seconds || 10, verifyResp.door_id);
+            toast.success(
+              `Xác thực thành công: ${verifyResp.user_name} (${verifyResp.employee_id || "--"}). Cửa mở ${verifyResp.auto_lock_seconds || 10}s.`,
+              "TRUY CẬP ĐƯỢC CHẤP THUẬN"
+            );
           } else if (verifyResp.result === "UNAUTHORIZED") {
             this.state = "DENIED";
             emptyAnalysis.statusText = `✓ ĐÃ NHẬN DIỆN • ${verifyResp.user_name} • KHÔNG CÓ QUYỀN TRUY CẬP (DOOR LOCKED)`;
-          } else if (verifyResp.result === "UNKNOWN") {
-            this.state = "UNKNOWN";
-            emptyAnalysis.statusText = "✕ NGƯỜI KHÔNG XÁC ĐỊNH • CỬA TIẾP TỤC KHÓA (Cảnh báo 5s/lần)";
+            toast.error(
+              `Đã nhận diện: ${verifyResp.user_name} nhưng TỪ CHỐI TRUY CẬP: Không có quyền qua cửa này!`,
+              "TỪ CHỐI TRUY CẬP"
+            );
           } else {
             this.state = "DENIED";
             emptyAnalysis.statusText = `✕ TỪ CHỐI TRUY CẬP (${verifyResp.message})`;
           }
         } else {
-          // Buffer still confirming or fluctuating
-          emptyAnalysis.statusText = `Đang phân tích xác nhận danh tính (${this.predictionQueue.length}/${this.REQUIRED_CONFIRMED_FRAMES})...`;
+          // Buffer still confirming consecutive frames for registered user
+          emptyAnalysis.statusText = `Đang xác thực danh tính (${verifyResp.user_name || "Nhân viên"}: ${this.predictionQueue.length}/${this.REQUIRED_CONFIRMED_FRAMES})...`;
         }
       } catch (err: any) {
         console.error("Verification call error:", err);
