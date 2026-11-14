@@ -12,6 +12,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 \i /docker-entrypoint-initdb.d/database/migrations/001_init_schema.sql
 \i /docker-entrypoint-initdb.d/database/migrations/002_access_logs_matrix.sql
 \i /docker-entrypoint-initdb.d/database/migrations/003_pgvector_upgrade.sql
+\i /docker-entrypoint-initdb.d/database/migrations/004_avatar_url_text.sql
 
 -- 3. Base Seeds (Admin user, Default roles, Doors, Cameras)
 \i /docker-entrypoint-initdb.d/database/seeds/001_initial_seeds.sql
