@@ -6,7 +6,7 @@ from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_active_admin
+from app.core.security import get_current_active_admin, get_current_user
 from app.database.session import get_db
 from app.models.audit import AuditLog
 from app.models.camera import Camera
@@ -46,6 +46,7 @@ def _to_cam_out(cam: Camera) -> CameraOut:
 def list_cameras(
     q: Optional[str] = Query(None, description="Search by name or camera code"),
     status: Optional[str] = Query(None, description="Filter by status (Online, Offline)"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -117,6 +118,7 @@ def create_camera(
 @router.get("/{camera_id}", response_model=CameraOut)
 def get_camera(
     camera_id: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """

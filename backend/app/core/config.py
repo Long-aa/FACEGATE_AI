@@ -1,6 +1,7 @@
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 from urllib.parse import quote_plus
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Root of backend directory
@@ -12,7 +13,16 @@ class Settings(BaseSettings):
     # API
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "FaceGate AI"
-    DEBUG: bool = True
+    DEBUG: Union[bool, str] = False
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.lower() in ("true", "1", "yes", "on")
+        return bool(v)
 
     # Security
     SECRET_KEY: str = "facegate-ai-super-secret-key-production-2026"
@@ -21,10 +31,10 @@ class Settings(BaseSettings):
 
     # Database
     DB_HOST: str = "localhost"
-    DB_PORT: int = 8000
+    DB_PORT: int = 5432
     DB_NAME: str = "facegate_ai"
     DB_USER: str = "postgres"
-    DB_PASSWORD: str = "Longdz19082005@"
+    DB_PASSWORD: str = "postgres"
     DATABASE_URL: Optional[str] = None
 
     # Redis
@@ -32,6 +42,7 @@ class Settings(BaseSettings):
 
     # AI Service
     AI_SERVICE_URL: str = "http://localhost:8001"
+    INTERNAL_SERVICE_KEY: str = "facegate-internal-secret-key"
 
     # Device Service
     DEVICE_SERVICE_URL: str = "http://localhost:8002"

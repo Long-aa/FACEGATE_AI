@@ -705,21 +705,72 @@ export default function DashboardPage() {
       });
       pipeline.initialize().catch(() => {});
 
-      navigator.mediaDevices
-        ?.getUserMedia({ video: { width: 1280, height: 720 } })
-        .then((stream) => {
-          mediaStreamRef.current = stream;
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            videoRef.current.play().catch(() => {});
-            pipeline.setVideoElement(videoRef.current);
-          }
-        })
-        .catch((err) => {
-          console.error("Webcam access denied or unavailable:", err);
-        });
-
       let isRunning = true;
+
+      const initWebcam = async () => {
+        try {
+          if (!navigator?.mediaDevices?.getUserMedia) {
+            setStatusText("Trình duyệt không hỗ trợ WebRTC Camera");
+            return;
+          }
+
+          // Dừng track cũ nếu còn tồn tại
+          if (mediaStreamRef.current) {
+            mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+            mediaStreamRef.current = null;
+          }
+
+          let stream: MediaStream | null = null;
+          try {
+            // Thử mở với độ phân giải khuyến nghị (ideal)
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: {
+                width: { ideal: 1280 },
+                height: { ideal: 720 },
+                facingMode: "user",
+              },
+              audio: false,
+            });
+          } catch (firstErr: any) {
+            // Fallback sang cấu hình cơ bản nếu ideal bị timeout hoặc từ chối
+            try {
+              stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            } catch (fallbackErr) {
+              throw fallbackErr;
+            }
+          }
+
+          if (!isRunning) {
+            stream?.getTracks().forEach((t) => t.stop());
+            return;
+          }
+
+          if (stream) {
+            mediaStreamRef.current = stream;
+            if (videoRef.current) {
+              videoRef.current.srcObject = stream;
+              videoRef.current.play().catch(() => {});
+              pipeline.setVideoElement(videoRef.current);
+            }
+          }
+        } catch (err: any) {
+          // Bắt lỗi AbortError (Timeout starting video source) hoặc NotAllowedError mà không crash dev overlay
+          const isTimeout = err?.name === "AbortError" || err?.message?.includes("Timeout");
+          const isPermission = err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError";
+          if (isTimeout) {
+            console.warn("Webcam timeout (camera đang bận hoặc bị ứng dụng khác chiếm giữ):", err?.message);
+            setStatusText("Camera đang bận hoặc phản hồi chậm. Vui lòng kiểm tra lại thiết bị.");
+          } else if (isPermission) {
+            console.warn("Chưa cấp quyền truy cập camera:", err?.message);
+            setStatusText("Chưa cấp quyền camera. Vui lòng cho phép quyền trên trình duyệt.");
+          } else {
+            console.warn("Webcam không khả dụng:", err);
+            setStatusText("Không thể mở camera thiết bị.");
+          }
+        }
+      };
+
+      initWebcam();
       const processLoop = async () => {
         if (!isRunning) return;
         if (pipelineRef.current && videoRef.current) {

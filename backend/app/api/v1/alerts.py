@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.security import get_current_user
+from app.core.security import get_current_active_admin, get_current_user
 from app.database.session import get_db
 from app.models.alert import Alert
 from app.models.audit import AuditLog
@@ -44,6 +44,7 @@ def list_alerts(
     status: Optional[str] = Query(None, description="UNRESOLVED, INVESTIGATING, PENDING, RESOLVED"),
     time_range: Optional[str] = Query(None, description="24h, 7d, all"),
     limit: Optional[int] = Query(None, description="Max alerts to return"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -80,7 +81,10 @@ def list_alerts(
 
 
 @router.get("/unresolved-count")
-def get_unresolved_alerts_count(db: Session = Depends(get_db)) -> Any:
+def get_unresolved_alerts_count(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
     """
     Get the exact count of unresolved alerts in the database for the Sidebar badge.
     """
@@ -160,6 +164,7 @@ def acknowledge_all_alerts(
 @router.delete("/{alert_id}")
 def delete_alert(
     alert_id: str,
+    current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db),
 ) -> Any:
     """

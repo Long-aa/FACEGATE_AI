@@ -12,8 +12,10 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_active_admin
 from app.database.session import get_db
 from app.models.audit import AuditLog
+from app.models.user import User
 from app.schemas.common import AuditLogListResponse, AuditLogOut
 
 router = APIRouter()
@@ -43,6 +45,7 @@ def list_audit_logs(
     date_to: Optional[str] = Query(None, description="Filter to ISO date"),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -108,6 +111,7 @@ def export_audit_logs(
     action: Optional[str] = Query(None),
     entity_type: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db),
 ) -> Response:
     """

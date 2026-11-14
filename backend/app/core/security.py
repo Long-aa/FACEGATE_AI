@@ -5,7 +5,7 @@ and FastAPI authentication dependencies.
 """
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -70,60 +70,89 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _extract_token(request: Request, auth: Optional[HTTPAuthorizationCredentials]) -> Optional[str]:
+    """Extract token from Authorization Bearer header or access_token cookie."""
+    if auth and auth.credentials:
+        return auth.credentials
+    cookie_token = request.cookies.get("access_token")
+    if cookie_token:
+        return cookie_token
+    return None
+
+
 def get_current_user_optional(
+    request: Request,
     auth: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer),
     db: Session = Depends(get_db),
 ) -> Optional[User]:
     """Get the current authenticated user if a valid token is provided, else None."""
-    if not auth or not auth.credentials:
+    token = _extract_token(request, auth)
+    if not token:
         return None
-    payload = decode_access_token(auth.credentials)
+    payload = decode_access_token(token)
     if not payload or "sub" not in payload:
         return None
     user_id = payload["sub"]
-    user = db.query(User).filter(User.id == user_id).first()
-    return user
+    return db.query(User).filter(User.id == user_id).first()
 
 
 def get_current_user(
+    request: Request,
     auth: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer),
     db: Session = Depends(get_db),
 ) -> User:
-    """FastAPI dependency that enforces a valid Bearer token and returns the User."""
+    """FastAPI dependency that enforces a valid Bearer token or HttpOnly cookie and returns the User."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Thông tin xác thực không hợp lệ hoặc đã hết hạn",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    if not auth or not auth.credentials:
-        if settings.DEBUG:
-            admin_user = db.query(User).filter((User.role == "ADMIN") | (User.is_superuser == True)).first()
-            if admin_user:
-                return admin_user
+    token = _extract_token(request, auth)
+    if not token:
         raise credentials_exception
 
-    payload = decode_access_token(auth.credentials)
+    payload = decode_access_token(token)
     if not payload or "sub" not in payload:
-        if settings.DEBUG:
-            admin_user = db.query(User).filter((User.role == "ADMIN") | (User.is_superuser == True)).first()
-            if admin_user:
-                return admin_user
         raise credentials_exception
 
     user_id = payload["sub"]
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        if settings.DEBUG:
-            admin_user = db.query(User).filter((User.role == "ADMIN") | (User.is_superuser == True)).first()
-            if admin_user:
-                return admin_user
         raise credentials_exception
+
     if user.status == "LOCKED":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Tài khoản đã bị khóa",
         )
     return user
+
+
+def get_current_user_or_service(
+    request: Request,
+    auth: Optional[HTTPAuthorizationCredentials] = Depends(security_bearer),
+    db: Session = Depends(get_db),
+) -> User:
+    """
+    FastAPI dependency that allows either:
+    1. Valid user Bearer JWT / HttpOnly cookie
+    2. Internal Service API Key (X-Internal-Service-Key or X-API-Key)
+    """
+    internal_key = request.headers.get("X-Internal-Service-Key") or request.headers.get("X-API-Key")
+    configured_key = getattr(settings, "INTERNAL_SERVICE_KEY", "facegate-internal-secret-key")
+    if internal_key and internal_key == configured_key:
+        service_user = db.query(User).filter(User.status == "ACTIVE").first()
+        if not service_user:
+            service_user = User(
+                id="internal-service-id",
+                employee_id="SYS-0001",
+                full_name="AI Internal Service",
+                role="ADMIN",
+                status="ACTIVE",
+            )
+        return service_user
+
+    return get_current_user(request, auth, db)
 
 
 def get_current_active_admin(

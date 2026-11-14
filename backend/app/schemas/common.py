@@ -370,6 +370,36 @@ class ReportSummaryOut(BaseModel):
     by_camera: List[Dict[str, Any]]
 
 
+class AttendanceRecord(BaseModel):
+    employee_id: str
+    name: str
+    department: str
+    date: str
+    check_in: Optional[str] = None
+    check_out: Optional[str] = None
+    first_door: Optional[str] = None
+    last_door: Optional[str] = None
+    working_hours: float
+    status: str
+    status_label: str
+    late_minutes: int
+    early_minutes: int
+
+
+class AttendanceSummary(BaseModel):
+    total_employees: int
+    present_count: int
+    on_time_count: int
+    late_count: int
+    avg_working_hours: float
+
+
+class AttendanceReportOut(BaseModel):
+    date: str
+    summary: AttendanceSummary
+    records: List[AttendanceRecord]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Settings Schemas
 # ─────────────────────────────────────────────────────────────────────────────

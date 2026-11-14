@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Union
+from pydantic import field_validator
 
 
 class Settings(BaseSettings):
@@ -7,7 +8,16 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "FaceGate AI Service"
     API_HOST: str = "0.0.0.0"
     API_PORT: int = 8001
-    DEBUG: bool = False
+    DEBUG: Union[bool, str] = False
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug(cls, v):
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str):
+            return v.lower() in ("true", "1", "yes", "on")
+        return bool(v)
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379"

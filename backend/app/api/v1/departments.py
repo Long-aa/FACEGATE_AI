@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
+from app.core.security import get_current_active_admin, get_current_user
 from app.database.session import get_db
 from app.models.audit import AuditLog
 from app.models.department import Department
@@ -26,6 +27,7 @@ def list_departments(
     q: Optional[str] = Query(None, description="Tìm kiếm theo tên hoặc mã phòng ban"),
     access_level: Optional[str] = Query(None, description="Lọc theo cấp độ an ninh"),
     status: Optional[str] = Query(None, description="Lọc theo trạng thái ACTIVE / INACTIVE"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -65,6 +67,7 @@ def list_departments(
 @router.get("/{department_id}", response_model=DepartmentOut)
 def get_department_detail(
     department_id: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -110,6 +113,7 @@ def get_department_detail(
 @router.post("", response_model=DepartmentOut, status_code=status.HTTP_201_CREATED)
 def create_department(
     payload: DepartmentCreate,
+    current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -164,6 +168,7 @@ def create_department(
 def update_department(
     department_id: str,
     payload: DepartmentUpdate,
+    current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -231,6 +236,7 @@ def update_department(
 def delete_department(
     department_id: str,
     force: bool = Query(False, description="Xóa cưỡng chế kể cả khi có nhân viên"),
+    current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db),
 ) -> None:
     """

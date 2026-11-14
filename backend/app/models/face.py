@@ -16,6 +16,22 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import relationship
 
+try:
+    from pgvector.sqlalchemy import Vector
+    PGVECTOR_AVAILABLE = True
+except ImportError:
+    from sqlalchemy.types import UserDefinedType
+
+    class Vector(UserDefinedType):
+        """Fallback UserDefinedType when pgvector package is not installed."""
+        def __init__(self, dim=None):
+            self.dim = dim
+
+        def get_col_spec(self, **kw):
+            return f"vector({self.dim})" if self.dim else "vector"
+
+    PGVECTOR_AVAILABLE = False
+
 from app.database.session import Base
 
 
@@ -35,6 +51,9 @@ class FaceProfile(Base):
     # Store embedding vector in native PostgreSQL float array and JSONB
     encoding = Column(ARRAY(Float), nullable=True)
     face_encoding_json = Column(JSONB, nullable=True)
+
+    # pgvector 512-D ArcFace embedding (Phase 2)
+    embedding = Column(Vector(512), nullable=True)
 
     status = Column(String(50), default="ACTIVE", nullable=False, index=True)  # PENDING, ACTIVE, FAILED, CANCELLED
     quality_score = Column(Float, nullable=True)
@@ -68,6 +87,22 @@ class FaceProfile(Base):
         """Set the vector in both ARRAY and JSONB representation."""
         self.encoding = [float(x) for x in vec]
         self.face_encoding_json = [float(x) for x in vec]
+        if len(vec) == 512:
+            self.embedding = [float(x) for x in vec]
+
+    def get_embedding_512(self) -> Optional[List[float]]:
+        """Return 512D ArcFace embedding vector if available."""
+        if self.embedding is not None:
+            if hasattr(self.embedding, "tolist"):
+                return self.embedding.tolist()
+            if isinstance(self.embedding, (list, tuple)):
+                return [float(x) for x in self.embedding]
+        return None
+
+    def set_embedding_512(self, vec: List[float]):
+        """Set 512D ArcFace embedding vector for pgvector."""
+        if vec and len(vec) == 512:
+            self.embedding = [float(x) for x in vec]
 
     def __repr__(self) -> str:
         return f"<FaceProfile(employee_id='{self.employee_id}', status='{self.status}')>"

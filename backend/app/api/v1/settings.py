@@ -17,7 +17,10 @@ router = APIRouter()
 
 
 @router.get("", response_model=SystemSettingsOut)
-def get_settings(db: Session = Depends(get_db)) -> Any:
+def get_settings(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
     """
     Retrieve all system settings from database as a dictionary.
     """

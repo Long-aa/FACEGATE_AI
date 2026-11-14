@@ -4,8 +4,9 @@ Provides real door management, lock/unlock control with database state persisten
 """
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_active_admin, get_current_user
@@ -19,6 +20,7 @@ from app.schemas.common import (
     DoorOut,
     DoorUpdate,
 )
+from app.services.virtual_door_service import virtual_door_manager
 from app.websocket.manager import ws_manager
 
 router = APIRouter()
@@ -44,6 +46,7 @@ def _to_door_out(door: Door) -> DoorOut:
 def list_doors(
     q: Optional[str] = Query(None, description="Search by door name or code"),
     status: Optional[str] = Query(None, description="Filter by status"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -104,9 +107,79 @@ def create_door(
     return _to_door_out(door)
 
 
+# ── Virtual Door Simulation & Emergency Endpoints (Phase 3) ──────────────────
+
+
+class SimulateDoorRequest(BaseModel):
+    event: str  # OPEN, CLOSE, HELD, FORCE, RESET_ALARM
+
+
+@router.get("/virtual-states", response_model=Dict[str, Any])
+def get_all_virtual_door_states(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
+    """
+    Get live virtual state machine status for all doors.
+    """
+    doors = db.query(Door).all()
+    for d in doors:
+        virtual_door_manager._ensure_door_init(d.id, d.name, d.unlock_duration or 5)
+    return virtual_door_manager.get_all_states()
+
+
+@router.post("/emergency/evacuate", response_model=Dict[str, Any])
+async def trigger_emergency_evacuate(
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db),
+) -> Any:
+    """
+    Emergency Evacuation: Releases all doors across the entire system.
+    """
+    doors = db.query(Door).all()
+    for d in doors:
+        virtual_door_manager._ensure_door_init(d.id, d.name, d.unlock_duration or 5)
+
+    res = await virtual_door_manager.emergency_evacuate(user_name=current_user.full_name)
+    return res
+
+
+@router.post("/emergency/lockdown", response_model=Dict[str, Any])
+async def trigger_emergency_lockdown(
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db),
+) -> Any:
+    """
+    Emergency Lockdown: Hard locks all doors, preventing access.
+    """
+    doors = db.query(Door).all()
+    for d in doors:
+        virtual_door_manager._ensure_door_init(d.id, d.name, d.unlock_duration or 5)
+
+    res = await virtual_door_manager.emergency_lockdown(user_name=current_user.full_name)
+    return res
+
+
+@router.post("/emergency/reset", response_model=Dict[str, Any])
+async def reset_emergency_mode(
+    current_user: User = Depends(get_current_active_admin),
+    db: Session = Depends(get_db),
+) -> Any:
+    """
+    Reset emergency mode and restore all doors to normal operational status.
+    """
+    doors = db.query(Door).all()
+    for d in doors:
+        virtual_door_manager._ensure_door_init(d.id, d.name, d.unlock_duration or 5)
+
+    res = await virtual_door_manager.emergency_reset(user_name=current_user.full_name)
+    return res
+
+
 @router.get("/{door_id}", response_model=DoorOut)
 def get_door(
     door_id: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -226,46 +299,13 @@ async def unlock_door(
     db.add(audit)
     db.commit()
 
-    try:
-        await ws_manager.broadcast({
-            "type": "DOOR_UPDATE",
-            "data": {
-                "door_id": door.id,
-                "door_name": door.name,
-                "lock_status": "Unlocked",
-                "duration": door.unlock_duration,
-                "action": "UNLOCK",
-            }
-        })
-        # Backend-driven physical auto-lock
-        duration = door.unlock_duration or 10
-        async def _auto_relock_door(d_id: str, delay: int):
-            await asyncio.sleep(delay)
-            from app.database.session import SessionLocal
-            db_l = SessionLocal()
-            try:
-                d_target = db_l.query(Door).filter(Door.id == d_id).first()
-                if d_target and d_target.lock_status == "Unlocked":
-                    d_target.lock_status = "Locked"
-                    db_l.commit()
-                    await ws_manager.broadcast({
-                        "type": "DOOR_UPDATE",
-                        "data": {
-                            "door_id": d_target.id,
-                            "door_name": d_target.name,
-                            "lock_status": "Locked",
-                            "duration": 0,
-                            "action": "AUTO_LOCK",
-                        }
-                    })
-            except Exception:
-                pass
-            finally:
-                db_l.close()
-
-        asyncio.create_task(_auto_relock_door(door.id, duration))
-    except Exception:
-        pass
+    # Update Virtual Door State Machine
+    v_state = await virtual_door_manager.unlock(
+        door_id=door.id,
+        door_name=door.name,
+        duration=door.unlock_duration or 10,
+        user_name=user_name,
+    )
 
     return DoorActionResponse(
         success=True,
@@ -307,19 +347,12 @@ async def lock_door(
     db.add(audit)
     db.commit()
 
-    try:
-        await ws_manager.broadcast({
-            "type": "DOOR_UPDATE",
-            "data": {
-                "door_id": door.id,
-                "door_name": door.name,
-                "lock_status": "Locked",
-                "duration": 0,
-                "action": "LOCK",
-            }
-        })
-    except Exception:
-        pass
+    # Update Virtual Door State Machine
+    await virtual_door_manager.lock(
+        door_id=door.id,
+        door_name=door.name,
+        user_name=user_name,
+    )
 
     return DoorActionResponse(
         success=True,
@@ -327,3 +360,46 @@ async def lock_door(
         lock_status="Locked",
         message=f"Đã khóa cửa '{door.name}'.",
     )
+
+
+@router.get("/{door_id}/virtual-state", response_model=Dict[str, Any])
+def get_virtual_door_state(
+    door_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
+    """
+    Get live state machine details for a specific virtual door.
+    """
+    door = db.query(Door).filter((Door.id == door_id) | (Door.door_code == door_id)).first()
+    if not door:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy cửa")
+    return virtual_door_manager.get_state(door.id, door.name, door.unlock_duration or 5)
+
+
+@router.post("/{door_id}/simulate", response_model=Dict[str, Any])
+async def simulate_door_event(
+    door_id: str,
+    payload: SimulateDoorRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
+    """
+    Simulate hardware door sensor and security events:
+    - OPEN: Door contact sensor opened.
+    - CLOSE: Door contact sensor closed.
+    - HELD: Door held open past allowed duration (warning).
+    - FORCE: Door forced open without authorization (critical alarm!).
+    - RESET_ALARM: Clear alarm and restore normal locked state.
+    """
+    door = db.query(Door).filter((Door.id == door_id) | (Door.door_code == door_id)).first()
+    if not door:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy cửa")
+
+    res = await virtual_door_manager.simulate_event(
+        door_id=door.id,
+        event=payload.event,
+        door_name=door.name,
+        user_name=current_user.full_name,
+    )
+    return res

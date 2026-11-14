@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import not_, or_
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_user
 from app.database.session import get_db
 from app.models.access_log import AccessLog
 from app.schemas.common import AccessLogListResponse, AccessLogOut
@@ -99,6 +100,7 @@ def list_access_logs(
     date_to: Optional[str] = Query(None, description="ISO or YYYY-MM-DD end date"),
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -229,6 +231,7 @@ def list_access_logs(
 
 @router.get("/export")
 def export_access_logs_csv(
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
     """
@@ -279,6 +282,7 @@ def export_access_logs_csv(
 @router.get("/{log_id}", response_model=AccessLogOut)
 def get_access_log_detail(
     log_id: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """

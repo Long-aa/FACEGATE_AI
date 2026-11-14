@@ -13,8 +13,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+import logging
 import time
+from app.core.security import get_current_user, get_current_user_or_service
 from app.database.session import get_db
+from app.integrations.ai_service_client import ai_client
 from app.models.access_log import AccessLog
 from app.models.access_rule import AccessRule
 from app.models.alert import Alert
@@ -23,6 +26,8 @@ from app.models.door import Door
 from app.models.face import FaceProfile
 from app.models.user import User
 from app.websocket.manager import ws_manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -181,20 +186,24 @@ def check_user_access_permission(db: Session, user: User, door: Door) -> tuple[b
 @router.post("/verify", response_model=VerifyResponse)
 async def verify_recognition(
     payload: VerifyRequest,
+    current_user: User = Depends(get_current_user_or_service),
     db: Session = Depends(get_db),
 ) -> Any:
     """
     Full real-time Face Recognition Access Control Pipeline:
     1. Resolve Door and Camera entities.
-    2. Check multi-face condition (if > 1 face -> fail-safe block).
-    3. Biometric recognition against PostgreSQL face profiles (using vector similarity or employee identity).
-    4. Anti-spoofing / Liveness verification.
-    5. Access permission & time rules evaluation.
-    6. Access Decision:
+    2. Real AI Service feature extraction (SCRFD + ArcFace + MiniFASNet) if image provided.
+    3. Multi-face condition check (if > 1 face -> fail-safe block).
+    4. Biometric recognition against PostgreSQL face profiles:
+       - pgvector HNSW cosine distance search (512D ArcFace)
+       - In-memory similarity fallback (128D geometric landmark vectors)
+    5. Anti-spoofing / Liveness verification.
+    6. Access permission & time rules evaluation.
+    7. Access Decision:
        - ALL conditions PASS -> ACCESS GRANTED -> Door Unlocked for 10 seconds.
        - ANY condition FAILS -> ACCESS DENIED -> Door STRICTLY LOCKED (Fail-Safe).
-    7. Persist AccessLog and Security Alert in PostgreSQL.
-    8. Broadcast real-time update to all connected WebSocket clients.
+    8. Persist AccessLog and Security Alert in PostgreSQL.
+    9. Broadcast real-time update to all connected WebSocket clients.
     """
     now = datetime.now(timezone.utc)
     threshold_val = payload.threshold if payload.threshold is not None else 0.60
@@ -225,7 +234,21 @@ async def verify_recognition(
     if not door:
         raise HTTPException(status_code=500, detail="Không tìm thấy thiết bị cửa trong hệ thống.")
 
-    # 2. Check multiple faces detected
+    # 2. Extract features from image_base64 via AI Microservice if face_vector not provided
+    if payload.image_base64 and (not payload.face_vector or len(payload.face_vector) == 0):
+        try:
+            ai_pipe = await ai_client.run_pipeline(payload.image_base64, check_liveness=True)
+            if ai_pipe and ai_pipe.get("face_detected"):
+                payload.face_vector = ai_pipe.get("embedding")
+                if payload.liveness_passed is None:
+                    payload.liveness_passed = ai_pipe.get("liveness_passed", True)
+                    payload.liveness_score = ai_pipe.get("liveness_score", 1.0)
+                if ai_pipe.get("face_count", 1) > 1:
+                    payload.face_count = ai_pipe.get("face_count")
+        except Exception as e:
+            logger.debug(f"AI Service pipeline extraction skipped: {e}")
+
+    # 3. Check multiple faces detected
     if payload.face_count and payload.face_count > 1:
         result = "MULTIPLE_FACES"
         user_name = "Nhiều người trong khung hình"
@@ -269,35 +292,63 @@ async def verify_recognition(
             timestamp=now.strftime("%H:%M:%S"),
         )
 
-    # 3. Match Face against Database Face Profiles
+    # 4. Match Face against Database Face Profiles
     user = None
     face_profile = None
     best_similarity = 0.0
 
-    # 3a. Vector matching if vector is provided
+    # 4a. Biometric vector matching (pgvector HNSW for 512D or in-memory loop fallback)
     if payload.face_vector and len(payload.face_vector) > 0:
-        active_profiles = db.query(FaceProfile).filter(FaceProfile.status == "ACTIVE").all()
-        best_profile = None
-        highest_sim = 0.0
+        # Step 4a-1: Try pgvector HNSW cosine search if 512-D ArcFace vector
+        if len(payload.face_vector) == 512:
+            try:
+                from app.models.face import PGVECTOR_AVAILABLE
+                if PGVECTOR_AVAILABLE and hasattr(FaceProfile, "embedding") and hasattr(FaceProfile.embedding, "cosine_distance"):
+                    candidate = (
+                        db.query(
+                            FaceProfile,
+                            (1.0 - FaceProfile.embedding.cosine_distance(payload.face_vector)).label("sim")
+                        )
+                        .filter(FaceProfile.status == "ACTIVE")
+                        .filter(FaceProfile.embedding.isnot(None))
+                        .order_by(FaceProfile.embedding.cosine_distance(payload.face_vector))
+                        .first()
+                    )
+                    if candidate and candidate[0] and candidate[1] is not None:
+                        pg_sim = float(candidate[1])
+                        if pg_sim >= threshold_val:
+                            face_profile = candidate[0]
+                            best_similarity = pg_sim
+                            user = db.query(User).filter(User.id == face_profile.user_id).first()
+                            if not user:
+                                user = db.query(User).filter(User.employee_id == face_profile.employee_id).first()
+            except Exception as e:
+                logger.debug(f"pgvector similarity search fallback to python comparison: {e}")
 
-        for prof in active_profiles:
-            stored_vec = prof.get_encoding_vector()
-            if stored_vec:
-                sim = compute_cosine_similarity(payload.face_vector, stored_vec)
-                if sim > highest_sim:
-                    highest_sim = sim
-                    best_profile = prof
+        # Step 4a-2: Fallback in-memory comparison (for 128D geometric vectors or non-pgvector DB)
+        if not face_profile:
+            active_profiles = db.query(FaceProfile).filter(FaceProfile.status == "ACTIVE").all()
+            best_profile = None
+            highest_sim = 0.0
 
-        if best_profile and highest_sim >= threshold_val:
-            user = db.query(User).filter(User.id == best_profile.user_id).first()
-            if not user:
-                user = db.query(User).filter(User.employee_id == best_profile.employee_id).first()
-            face_profile = best_profile
-            best_similarity = highest_sim
-        else:
-            best_similarity = highest_sim
+            for prof in active_profiles:
+                stored_vec = prof.get_encoding_vector()
+                if stored_vec:
+                    sim = compute_cosine_similarity(payload.face_vector, stored_vec)
+                    if sim > highest_sim:
+                        highest_sim = sim
+                        best_profile = prof
 
-    # 3b. Direct employee_id matching if specified
+            if best_profile and highest_sim >= threshold_val:
+                user = db.query(User).filter(User.id == best_profile.user_id).first()
+                if not user:
+                    user = db.query(User).filter(User.employee_id == best_profile.employee_id).first()
+                face_profile = best_profile
+                best_similarity = highest_sim
+            else:
+                best_similarity = highest_sim
+
+    # 4b. Direct employee_id matching if specified
     if not user and payload.employee_id:
         user = db.query(User).filter(User.employee_id == payload.employee_id).first()
         if user:
@@ -567,33 +618,18 @@ async def verify_recognition(
                 "message": message,
             }
         })
-        # Backend-driven 10-second physical auto-lock
+        # Update Virtual Door State Machine with auto-countdown relock
         if door_unlocked:
-            async def _auto_relock(d_id: str, delay: int):
-                await asyncio.sleep(delay)
-                from app.database.session import SessionLocal
-                db_l = SessionLocal()
-                try:
-                    d_target = db_l.query(Door).filter(Door.id == d_id).first()
-                    if d_target and d_target.lock_status == "Unlocked":
-                        d_target.lock_status = "Locked"
-                        db_l.commit()
-                        await ws_manager.broadcast({
-                            "type": "DOOR_UPDATE",
-                            "data": {
-                                "door_id": d_target.id,
-                                "door_name": d_target.name,
-                                "lock_status": "Locked",
-                                "duration": 0,
-                                "action": "AUTO_LOCK",
-                            }
-                        })
-                except Exception:
-                    pass
-                finally:
-                    db_l.close()
-
-            asyncio.create_task(_auto_relock(door.id, auto_lock_sec))
+            try:
+                from app.services.virtual_door_service import virtual_door_manager
+                await virtual_door_manager.unlock(
+                    door_id=door.id,
+                    door_name=door.name,
+                    duration=auto_lock_sec,
+                    user_name=user_name,
+                )
+            except Exception as e:
+                logger.debug(f"Virtual door unlock trigger failed: {e}")
     except Exception:
         pass
 
@@ -619,6 +655,7 @@ async def verify_recognition(
 @router.get("/logs")
 def get_recognition_logs(
     limit: int = 15,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """

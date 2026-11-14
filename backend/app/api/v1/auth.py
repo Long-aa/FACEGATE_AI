@@ -4,9 +4,10 @@ Handles login, logout, and current user profile retrieval.
 """
 from datetime import datetime, timezone
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import (
     create_access_token,
     get_current_user,
@@ -23,11 +24,12 @@ router = APIRouter()
 @router.post("/login", response_model=TokenResponse)
 def login(
     payload: LoginRequest,
+    response: Response,
     db: Session = Depends(get_db),
 ) -> Any:
     """
     Authenticate user by email or employee_id, verify password hash from database,
-    and return signed JWT token with user profile and permissions.
+    set HttpOnly session cookie, and return signed JWT token with user profile and permissions.
     """
     query = payload.username_or_email.strip()
     user = (
@@ -46,16 +48,12 @@ def login(
             detail="Tài khoản hoặc mật khẩu không chính xác",
         )
 
-    # Verify password against bcrypt hash in database
+    # Strictly verify password against bcrypt hash in database
     if not verify_password(payload.password, user.hashed_password):
-        # Fallback check for initial admin bootstrap
-        if query == "admin" and payload.password == "Admin@123" and user.is_superuser:
-            pass  # Allowed for emergency admin recovery
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Tài khoản hoặc mật khẩu không chính xác",
-            )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Tài khoản hoặc mật khẩu không chính xác",
+        )
 
     if user.status == "LOCKED":
         raise HTTPException(
@@ -79,6 +77,18 @@ def login(
             "role": user.role,
             "is_superuser": user.is_superuser,
         },
+    )
+
+    # Set HttpOnly Cookie for secure session (XSS-proof)
+    response.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        expires=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        samesite="lax",
+        secure=not settings.DEBUG,
+        path="/",
     )
 
     # Log to audit_logs
@@ -116,12 +126,14 @@ def login(
 
 @router.post("/logout")
 def logout(
+    response: Response,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    Log user logout event in audit logs.
+    Log user logout event in audit logs and clear HttpOnly cookie.
     """
+    response.delete_cookie(key="access_token", path="/")
     audit = AuditLog(
         action="AUTH_LOGOUT",
         user_id=current_user.id,

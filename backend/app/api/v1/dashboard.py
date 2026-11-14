@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_user
 from app.database.session import get_db
 from app.models.access_log import AccessLog
 from app.models.alert import Alert
@@ -24,7 +25,10 @@ router = APIRouter()
 
 
 @router.get("/stats", response_model=DashboardStatsOut)
-def get_dashboard_stats(db: Session = Depends(get_db)) -> Any:
+def get_dashboard_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
     """
     Calculate real KPI metrics from database tables:
     - total_users: COUNT(users)
@@ -102,6 +106,7 @@ def get_dashboard_stats(db: Session = Depends(get_db)) -> Any:
 @router.get("/recent-logs", response_model=List[AccessLogOut])
 def get_dashboard_recent_logs(
     limit: int = 10,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -150,7 +155,10 @@ def get_dashboard_recent_logs(
 
 
 @router.get("/ai-engine", response_model=AiEngineStatusOut)
-def get_ai_engine_status(db: Session = Depends(get_db)) -> Any:
+def get_ai_engine_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
     """
     Get real AI engine telemetry and status based on database access logs:
     - Average latency and confidence of recent recognitions
@@ -191,6 +199,7 @@ def get_dashboard_analytics(
     range_type: Optional[str] = Query(None, alias="range"),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """

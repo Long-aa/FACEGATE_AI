@@ -28,7 +28,24 @@ app.include_router(embedding.router, prefix="/embedding", tags=["Embedding"])
 @app.on_event("startup")
 async def startup_event():
     """Load AI models on startup."""
-    pass
+    import logging
+    import os
+    from app.services.face_service import face_service
+    from app.services.liveness_service import liveness_service
+
+    logger = logging.getLogger(__name__)
+    os.makedirs(settings.MODELS_DIR, exist_ok=True)
+    try:
+        face_service.load_models(settings.MODELS_DIR)
+        logger.info("Face detection/recognition models loaded successfully")
+    except Exception as e:
+        logger.error(f"Could not load face models: {e}")
+
+    try:
+        liveness_service.load_models(settings.MODELS_DIR)
+        logger.info("Liveness detection service initialized")
+    except Exception as e:
+        logger.error(f"Could not load liveness models: {e}")
 
 
 @app.on_event("shutdown")

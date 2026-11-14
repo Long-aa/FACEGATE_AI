@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS users (
     hashed_password VARCHAR(255),
     is_superuser BOOLEAN NOT NULL DEFAULT FALSE,
     card_number VARCHAR(100),
-    avatar_url VARCHAR(500),
+    avatar_url TEXT,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS face_profiles (
     status VARCHAR(50) NOT NULL DEFAULT 'ACTIVE',
     quality_score FLOAT,
     samples_count INTEGER NOT NULL DEFAULT 1,
-    master_photo_url VARCHAR(500),
+    master_photo_url TEXT,
     registered_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     registered_by VARCHAR(100),
     notes TEXT,

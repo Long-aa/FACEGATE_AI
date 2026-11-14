@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_active_admin, get_current_user
 from app.database.session import get_db
 from app.models.audit import AuditLog
 from app.models.face import FaceProfile
@@ -191,6 +192,7 @@ def _validate_precheck_employee(employee_id: Optional[str], db: Session) -> dict
 @router.get("/pre-check")
 def pre_check_enrollment_query(
     employee_id: Optional[str] = Query(None, description="Employee ID to pre-check"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """Pre-check employee via query parameter (supports empty strings for IT02-01)."""
@@ -200,6 +202,7 @@ def pre_check_enrollment_query(
 @router.get("/pre-check/{employee_id}")
 def pre_check_enrollment(
     employee_id: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -223,7 +226,10 @@ class CameraCheckRequest(BaseModel):
 
 
 @router.post("/verify-camera")
-def verify_camera_feed(payload: CameraCheckRequest) -> Any:
+def verify_camera_feed(
+    payload: CameraCheckRequest,
+    current_user: User = Depends(get_current_user),
+) -> Any:
     """
     Validate camera device capabilities according to IT02-06 through IT02-10:
     - IT02-06: Chỉ số camera không hợp lệ
@@ -280,6 +286,7 @@ def verify_camera_feed(payload: CameraCheckRequest) -> Any:
 @router.get("", response_model=List[FaceProfileOut])
 def list_face_profiles(
     status: Optional[str] = Query(None, description="Filter by status (ACTIVE, PENDING, FAILED)"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -313,6 +320,7 @@ def list_face_profiles(
 @router.get("/{employee_id}", response_model=FaceProfileDetailOut)
 def get_face_profile(
     employee_id: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -344,6 +352,7 @@ def get_face_profile(
 @router.post("/enroll", response_model=FaceProfileOut)
 async def enroll_face_profile(
     payload: EnrollFaceRequest,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -528,6 +537,7 @@ async def enroll_face_profile(
 @router.delete("/{employee_id}")
 def delete_face_profile(
     employee_id: str,
+    current_user: User = Depends(get_current_active_admin),
     db: Session = Depends(get_db),
 ) -> Any:
     """

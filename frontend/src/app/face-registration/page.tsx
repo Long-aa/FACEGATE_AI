@@ -138,7 +138,13 @@ export default function FaceRegistrationPage() {
           audio: false,
         };
 
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(constraints);
+        } catch (firstErr) {
+          // Fallback to basic constraint if strict or ideal resolution times out
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        }
         streamRef.current = stream;
 
         if (videoRef.current) {

@@ -65,6 +65,7 @@ def list_users(
     status: Optional[str] = Query(None, description="Filter by status (ACTIVE, WAITING, DRAFT, LOCKED)"),
     page: int = Query(1, ge=1),
     limit: int = Query(5, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -259,7 +260,10 @@ async def create_user(
 
 
 @router.get("/next-employee-id")
-def get_next_employee_id(db: Session = Depends(get_db)) -> Any:
+def get_next_employee_id(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
     """
     Generate next available employee ID in format EMP-xxxx (read-only auto ID).
     """
@@ -278,6 +282,7 @@ def get_next_employee_id(db: Session = Depends(get_db)) -> Any:
 @router.get("/{user_id}", response_model=UserOut)
 def get_user_detail(
     user_id: str,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -557,6 +562,7 @@ async def delete_user(
 def get_user_access_history(
     user_id: str,
     limit: int = 10,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """

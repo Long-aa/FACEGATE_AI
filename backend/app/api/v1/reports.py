@@ -3,17 +3,21 @@ Reports and analytics API endpoints for FaceGate AI.
 Provides real database aggregations for traffic charts, success/denied distributions, top visitors, and CSV export.
 """
 import csv
-from datetime import datetime, timedelta, timezone
+from datetime import date as dt_date, datetime, timedelta, timezone
 import io
-from typing import Any, List
+from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.security import get_current_user
 from app.database.session import get_db
 from app.models.access_log import AccessLog
 from app.models.user import User
 from app.schemas.common import (
+    AttendanceRecord,
+    AttendanceReportOut,
+    AttendanceSummary,
     DistributionData,
     ReportSummaryOut,
     TopUserItem,
@@ -26,6 +30,7 @@ router = APIRouter()
 @router.get("/summary", response_model=ReportSummaryOut)
 def get_report_summary(
     range_type: str = Query("today", description="today, 7days, or 30days"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Any:
     """
@@ -165,12 +170,13 @@ def get_report_summary(
 @router.get("/export")
 def export_report_csv(
     range_type: str = Query("today"),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
     """
     Export aggregated report summary to CSV.
     """
-    summary = get_report_summary(range_type, db)
+    summary = get_report_summary(range_type, current_user, db)
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -200,4 +206,266 @@ def export_report_csv(
         content=csv_data,
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=report_{range_type}.csv"},
+    )
+
+
+# ── Time Attendance Engine & Export (Phase 4) ────────────────────────────────
+
+
+def _compute_daily_attendance(
+    db: Session,
+    target_date: dt_date,
+    department: Optional[str] = None,
+    status_filter: Optional[str] = None,
+) -> Tuple[AttendanceSummary, List[AttendanceRecord]]:
+    """
+    First-IN / Last-OUT attendance calculation per employee for target_date.
+    """
+    # Start and end of the day in UTC
+    day_start = datetime(target_date.year, target_date.month, target_date.day, 0, 0, 0, tzinfo=timezone.utc)
+    day_end = day_start + timedelta(days=1)
+
+    # 1. Query all users
+    user_query = db.query(User).filter(User.status == "ACTIVE")
+    if department:
+        user_query = user_query.filter(User.department.ilike(f"%{department.strip()}%"))
+    users = user_query.order_by(User.employee_id.asc()).all()
+
+    # 2. Query all GRANTED access logs for that day with employee_id
+    logs = (
+        db.query(AccessLog)
+        .filter(
+            AccessLog.timestamp >= day_start,
+            AccessLog.timestamp < day_end,
+            AccessLog.result == "GRANTED",
+            AccessLog.employee_id.isnot(None),
+        )
+        .order_by(AccessLog.timestamp.asc())
+        .all()
+    )
+
+    # Group logs by employee_id
+    logs_by_emp: dict[str, list[AccessLog]] = {}
+    for log in logs:
+        emp_id = log.employee_id
+        if emp_id not in logs_by_emp:
+            logs_by_emp[emp_id] = []
+        logs_by_emp[emp_id].append(log)
+
+    records: List[AttendanceRecord] = []
+    total_hours = 0.0
+    present_count = 0
+    on_time_count = 0
+    late_count = 0
+
+    date_str = target_date.strftime("%Y-%m-%d")
+
+    for u in users:
+        emp_logs = logs_by_emp.get(u.employee_id, [])
+        if not emp_logs:
+            if status_filter and status_filter.upper() not in ("ALL", "ABSENT"):
+                continue
+            records.append(
+                AttendanceRecord(
+                    employee_id=u.employee_id,
+                    name=u.full_name,
+                    department=u.department or "Chưa phân ban",
+                    date=date_str,
+                    check_in=None,
+                    check_out=None,
+                    first_door=None,
+                    last_door=None,
+                    working_hours=0.0,
+                    status="ABSENT",
+                    status_label="Vắng mặt",
+                    late_minutes=0,
+                    early_minutes=0,
+                )
+            )
+            continue
+
+        present_count += 1
+        first_log = emp_logs[0]
+        last_log = emp_logs[-1]
+
+        # UTC to Vietnam (UTC+7)
+        first_vn = first_log.timestamp + timedelta(hours=7) if first_log.timestamp else datetime.now(timezone.utc)
+        last_vn = last_log.timestamp + timedelta(hours=7) if last_log.timestamp else datetime.now(timezone.utc)
+
+        check_in_str = first_vn.strftime("%H:%M:%S")
+        check_out_str = last_vn.strftime("%H:%M:%S") if len(emp_logs) > 1 else check_in_str
+
+        # Working hours calculation
+        if len(emp_logs) > 1 and last_log.timestamp and first_log.timestamp:
+            diff_seconds = max(0, (last_log.timestamp - first_log.timestamp).total_seconds())
+            hours = round(diff_seconds / 3600.0, 2)
+        else:
+            hours = 0.0
+
+        total_hours += hours
+
+        # Standard work hours: 08:30 (510 min) to 17:30 (1050 min)
+        check_in_min = first_vn.hour * 60 + first_vn.minute
+        check_out_min = last_vn.hour * 60 + last_vn.minute
+
+        late_min = max(0, check_in_min - 510)
+        early_min = max(0, 1050 - check_out_min) if len(emp_logs) > 1 and check_out_min < 1050 else 0
+
+        if late_min > 0:
+            late_count += 1
+            att_status = "LATE"
+            status_label = f"Đi muộn ({late_min}p)"
+        elif len(emp_logs) == 1:
+            on_time_count += 1
+            att_status = "SINGLE_PUNCH"
+            status_label = "Đang làm việc"
+        elif early_min > 0 and hours < 7.5:
+            att_status = "EARLY_LEAVE"
+            status_label = f"Về sớm ({early_min}p)"
+        elif hours >= 8.5:
+            on_time_count += 1
+            att_status = "OVERTIME"
+            status_label = "Làm thêm giờ (OT)"
+        else:
+            on_time_count += 1
+            att_status = "ON_TIME"
+            status_label = "Đúng giờ"
+
+        if status_filter and status_filter.upper() != "ALL" and att_status != status_filter.upper():
+            continue
+
+        records.append(
+            AttendanceRecord(
+                employee_id=u.employee_id,
+                name=u.full_name,
+                department=u.department or "Chưa phân ban",
+                date=date_str,
+                check_in=check_in_str,
+                check_out=check_out_str,
+                first_door=first_log.door_name,
+                last_door=last_log.door_name,
+                working_hours=hours,
+                status=att_status,
+                status_label=status_label,
+                late_minutes=late_min,
+                early_minutes=early_min,
+            )
+        )
+
+    avg_hours = round(total_hours / max(1, present_count), 1) if present_count > 0 else 0.0
+
+    summary = AttendanceSummary(
+        total_employees=len(users),
+        present_count=present_count,
+        on_time_count=on_time_count,
+        late_count=late_count,
+        avg_working_hours=avg_hours,
+    )
+
+    return summary, records
+
+
+@router.get("/attendance", response_model=AttendanceReportOut)
+def get_daily_attendance(
+    date: Optional[str] = Query(None, description="Target date YYYY-MM-DD (defaults to today)"),
+    department: Optional[str] = Query(None, description="Filter by department"),
+    status: Optional[str] = Query("ALL", description="Filter by status: ALL, ON_TIME, LATE, ABSENT, etc."),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
+    """
+    Get daily First-IN / Last-OUT time attendance records from FaceGate access logs.
+    """
+    if date:
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            target_date = datetime.now(timezone.utc).date()
+    else:
+        target_date = datetime.now(timezone.utc).date()
+
+    summary, records = _compute_daily_attendance(db, target_date, department, status)
+
+    return AttendanceReportOut(
+        date=target_date.strftime("%Y-%m-%d"),
+        summary=summary,
+        records=records,
+    )
+
+
+@router.get("/attendance/export")
+def export_attendance_csv(
+    date: Optional[str] = Query(None, description="Target date YYYY-MM-DD"),
+    department: Optional[str] = Query(None),
+    status: Optional[str] = Query("ALL"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """
+    Export First-IN / Last-OUT Attendance Report to CSV with UTF-8 BOM for Excel.
+    """
+    if date:
+        try:
+            target_date = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            target_date = datetime.now(timezone.utc).date()
+    else:
+        target_date = datetime.now(timezone.utc).date()
+
+    date_str = target_date.strftime("%Y-%m-%d")
+    summary, records = _compute_daily_attendance(db, target_date, department, status)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Header info
+    writer.writerow(["BẢNG CHẤM CÔNG NHẬN DIỆN KHUÔN MẶT - FACEGATE AI", f"Ngày: {date_str}"])
+    writer.writerow([
+        f"Tổng nhân viên: {summary.total_employees}",
+        f"Có mặt: {summary.present_count}",
+        f"Đúng giờ: {summary.on_time_count}",
+        f"Đi muộn: {summary.late_count}",
+        f"Giờ làm TB: {summary.avg_working_hours}h",
+    ])
+    writer.writerow([])
+
+    # Table columns
+    writer.writerow([
+        "Mã Nhân Viên",
+        "Họ và Tên",
+        "Phòng Ban",
+        "Ngày",
+        "Giờ Vào (Check-In)",
+        "Giờ Ra (Check-Out)",
+        "Cửa Check-In",
+        "Cửa Check-Out",
+        "Tổng Giờ Làm (h)",
+        "Trạng Thái",
+        "Đi Muộn (phút)",
+        "Về Sớm (phút)",
+    ])
+
+    for r in records:
+        writer.writerow([
+            r.employee_id,
+            r.name,
+            r.department,
+            r.date,
+            r.check_in or "--:--",
+            r.check_out or "--:--",
+            r.first_door or "--",
+            r.last_door or "--",
+            f"{r.working_hours:.2f}",
+            r.status_label,
+            r.late_minutes,
+            r.early_minutes,
+        ])
+
+    # Prepend UTF-8 BOM for seamless Microsoft Excel rendering
+    bom_csv = "\ufeff" + output.getvalue()
+
+    return Response(
+        content=bom_csv,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename=cham_cong_{date_str}.csv"},
     )

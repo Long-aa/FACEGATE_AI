@@ -35,6 +35,7 @@ async function request<T>(
   let response: Response;
   try {
     response = await fetch(url, {
+      credentials: "include",
       ...options,
       headers,
     });
@@ -257,6 +258,28 @@ export const api = {
       request<any>(`/api/v1/doors/${id}/lock`, {
         method: "POST",
       }),
+    // Virtual Door State Machine & Simulator (Phase 3)
+    getVirtualStates: () =>
+      request<Record<string, any>>("/api/v1/doors/virtual-states"),
+    getVirtualState: (id: string) =>
+      request<any>(`/api/v1/doors/${id}/virtual-state`),
+    simulate: (id: string, event: string) =>
+      request<any>(`/api/v1/doors/${id}/simulate`, {
+        method: "POST",
+        body: JSON.stringify({ event }),
+      }),
+    emergencyEvacuate: () =>
+      request<any>("/api/v1/doors/emergency/evacuate", {
+        method: "POST",
+      }),
+    emergencyLockdown: () =>
+      request<any>("/api/v1/doors/emergency/lockdown", {
+        method: "POST",
+      }),
+    emergencyReset: () =>
+      request<any>("/api/v1/doors/emergency/reset", {
+        method: "POST",
+      }),
   },
 
   // ── 6. Reports ────────────────────────────────────────────────
@@ -265,6 +288,20 @@ export const api = {
       request<any>(`/api/v1/reports/summary?range_type=${rangeType}`),
     getExportUrl: (rangeType = "today") =>
       `${API_BASE_URL}/api/v1/reports/export?range_type=${rangeType}`,
+    getAttendance: (date?: string, department?: string, status?: string) => {
+      const sp = new URLSearchParams();
+      if (date) sp.append("date", date);
+      if (department) sp.append("department", department);
+      if (status && status !== "ALL") sp.append("status", status);
+      return request<any>(`/api/v1/reports/attendance?${sp.toString()}`);
+    },
+    getAttendanceExportUrl: (date?: string, department?: string, status?: string) => {
+      const sp = new URLSearchParams();
+      if (date) sp.append("date", date);
+      if (department) sp.append("department", department);
+      if (status && status !== "ALL") sp.append("status", status);
+      return `${API_BASE_URL}/api/v1/reports/attendance/export?${sp.toString()}`;
+    },
   },
 
   // ── 7. Alerts ─────────────────────────────────────────────────
