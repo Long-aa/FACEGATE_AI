@@ -52,7 +52,7 @@ def list_doors(
     """
     List all doors from database with real lock status.
     """
-    query = db.query(Door)
+    query = db.query(Door).filter(Door.is_deleted == False)
     if q:
         search_str = f"%{q.strip()}%"
         query = query.filter((Door.name.ilike(search_str)) | (Door.door_code.ilike(search_str)))
@@ -122,7 +122,7 @@ def get_all_virtual_door_states(
     """
     Get live virtual state machine status for all doors.
     """
-    doors = db.query(Door).all()
+    doors = db.query(Door).filter(Door.is_deleted == False).all()
     for d in doors:
         virtual_door_manager._ensure_door_init(d.id, d.name, d.unlock_duration or 5)
     return virtual_door_manager.get_all_states()
@@ -136,7 +136,7 @@ async def trigger_emergency_evacuate(
     """
     Emergency Evacuation: Releases all doors across the entire system.
     """
-    doors = db.query(Door).all()
+    doors = db.query(Door).filter(Door.is_deleted == False).all()
     for d in doors:
         virtual_door_manager._ensure_door_init(d.id, d.name, d.unlock_duration or 5)
 
@@ -152,7 +152,7 @@ async def trigger_emergency_lockdown(
     """
     Emergency Lockdown: Hard locks all doors, preventing access.
     """
-    doors = db.query(Door).all()
+    doors = db.query(Door).filter(Door.is_deleted == False).all()
     for d in doors:
         virtual_door_manager._ensure_door_init(d.id, d.name, d.unlock_duration or 5)
 
@@ -168,7 +168,7 @@ async def reset_emergency_mode(
     """
     Reset emergency mode and restore all doors to normal operational status.
     """
-    doors = db.query(Door).all()
+    doors = db.query(Door).filter(Door.is_deleted == False).all()
     for d in doors:
         virtual_door_manager._ensure_door_init(d.id, d.name, d.unlock_duration or 5)
 
@@ -185,7 +185,7 @@ def get_door(
     """
     Get detailed information of a single door.
     """
-    door = db.query(Door).filter((Door.id == door_id) | (Door.door_code == door_id)).first()
+    door = db.query(Door).filter(((Door.id == door_id) | (Door.door_code == door_id)), Door.is_deleted == False).first()
     if not door:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -204,7 +204,7 @@ def update_door(
     """
     Update door configuration.
     """
-    door = db.query(Door).filter((Door.id == door_id) | (Door.door_code == door_id)).first()
+    door = db.query(Door).filter(((Door.id == door_id) | (Door.door_code == door_id)), Door.is_deleted == False).first()
     if not door:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -240,7 +240,7 @@ def delete_door(
     """
     Delete a door from the database.
     """
-    door = db.query(Door).filter((Door.id == door_id) | (Door.door_code == door_id)).first()
+    door = db.query(Door).filter(((Door.id == door_id) | (Door.door_code == door_id)), Door.is_deleted == False).first()
     if not door:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -259,7 +259,7 @@ def delete_door(
         details={"door_code": door.door_code, "name": door.name},
     )
     db.add(audit)
-    db.delete(door)
+    door.is_deleted = True
     db.commit()
 
     return {"success": True, "message": f"Đã xóa cửa {door.name}"}
@@ -275,7 +275,7 @@ async def unlock_door(
     Remotely unlock a door. Updates door lock_status in database, logs to audit_logs,
     and returns auto-lock duration.
     """
-    door = db.query(Door).filter((Door.id == door_id) | (Door.door_code == door_id)).first()
+    door = db.query(Door).filter(((Door.id == door_id) | (Door.door_code == door_id)), Door.is_deleted == False).first()
     if not door:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -324,7 +324,7 @@ async def lock_door(
     """
     Remotely lock a door immediately.
     """
-    door = db.query(Door).filter((Door.id == door_id) | (Door.door_code == door_id)).first()
+    door = db.query(Door).filter(((Door.id == door_id) | (Door.door_code == door_id)), Door.is_deleted == False).first()
     if not door:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -371,7 +371,7 @@ def get_virtual_door_state(
     """
     Get live state machine details for a specific virtual door.
     """
-    door = db.query(Door).filter((Door.id == door_id) | (Door.door_code == door_id)).first()
+    door = db.query(Door).filter(((Door.id == door_id) | (Door.door_code == door_id)), Door.is_deleted == False).first()
     if not door:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy cửa")
     return virtual_door_manager.get_state(door.id, door.name, door.unlock_duration or 5)
@@ -392,7 +392,7 @@ async def simulate_door_event(
     - FORCE: Door forced open without authorization (critical alarm!).
     - RESET_ALARM: Clear alarm and restore normal locked state.
     """
-    door = db.query(Door).filter((Door.id == door_id) | (Door.door_code == door_id)).first()
+    door = db.query(Door).filter(((Door.id == door_id) | (Door.door_code == door_id)), Door.is_deleted == False).first()
     if not door:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Không tìm thấy cửa")
 

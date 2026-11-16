@@ -3,6 +3,7 @@ Camera model for FaceGate AI.
 """
 import uuid
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -39,6 +40,7 @@ class Camera(Base):
         nullable=True,
         index=True,
     )
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

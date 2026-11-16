@@ -37,12 +37,14 @@ CREATE TABLE IF NOT EXISTS users (
     is_superuser BOOLEAN NOT NULL DEFAULT FALSE,
     card_number VARCHAR(100),
     avatar_url TEXT,
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_users_employee_id ON users(employee_id);
 CREATE INDEX IF NOT EXISTS idx_users_full_name ON users(full_name);
 CREATE INDEX IF NOT EXISTS idx_users_department ON users(department);
+CREATE INDEX IF NOT EXISTS idx_users_is_deleted ON users(is_deleted);
 CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);
 
 -- ------------------------------------------------------------
@@ -93,11 +95,13 @@ CREATE TABLE IF NOT EXISTS doors (
     unlock_duration INTEGER NOT NULL DEFAULT 5,
     last_activity TIMESTAMPTZ,
     last_user_name VARCHAR(255),
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_doors_door_code ON doors(door_code);
 CREATE INDEX IF NOT EXISTS idx_doors_name ON doors(name);
+CREATE INDEX IF NOT EXISTS idx_doors_is_deleted ON doors(is_deleted);
 
 -- ------------------------------------------------------------
 -- 6. Cameras
@@ -117,11 +121,13 @@ CREATE TABLE IF NOT EXISTS cameras (
     resolution VARCHAR(50) NOT NULL DEFAULT '1920x1080',
     res_label VARCHAR(50) NOT NULL DEFAULT '1080p',
     door_id VARCHAR(36) REFERENCES doors(id) ON DELETE SET NULL,
+    is_deleted BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_cameras_camera_code ON cameras(camera_code);
 CREATE INDEX IF NOT EXISTS idx_cameras_door_id ON cameras(door_id);
+CREATE INDEX IF NOT EXISTS idx_cameras_is_deleted ON cameras(is_deleted);
 
 -- ------------------------------------------------------------
 -- 7. Access Rules
@@ -257,3 +263,34 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_user_id ON audit_logs(user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
+
+-- ------------------------------------------------------------
+-- 13. Departments
+-- ------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS departments (
+    id VARCHAR(36) PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    code VARCHAR(50) UNIQUE NOT NULL,
+    name VARCHAR(100) UNIQUE NOT NULL,
+    description TEXT,
+    manager_name VARCHAR(100),
+    contact_email VARCHAR(100),
+    contact_phone VARCHAR(50),
+    location VARCHAR(100),
+    access_level VARCHAR(50) NOT NULL DEFAULT 'STANDARD',
+    allowed_doors JSONB NOT NULL DEFAULT '[]'::jsonb,
+    color VARCHAR(30) NOT NULL DEFAULT '#00D4AA',
+    status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_departments_code ON departments(code);
+CREATE INDEX IF NOT EXISTS idx_departments_status ON departments(status);
+
+-- ------------------------------------------------------------
+-- Composite Performance Indexes
+-- ------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_access_logs_ts_res ON access_logs(timestamp DESC, result);
+CREATE INDEX IF NOT EXISTS idx_access_logs_emp_ts ON access_logs(employee_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_access_logs_door_ts ON access_logs(door_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_access_rules_door_active ON access_rules(door_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, is_read, created_at DESC);

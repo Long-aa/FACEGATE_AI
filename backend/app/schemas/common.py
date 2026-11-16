@@ -438,3 +438,97 @@ class AuditLogListResponse(BaseModel):
     limit: int
     total_pages: int
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Access Rule Schemas
+# ─────────────────────────────────────────────────────────────────────────────
+
+class AccessRuleBase(BaseModel):
+    name: str
+    description: Optional[str] = None
+    door_id: str
+    user_id: Optional[str] = None
+    department: Optional[str] = None
+    start_time: str = "00:00:00"
+    end_time: str = "23:59:59"
+    allowed_days: List[int] = [1, 2, 3, 4, 5, 6, 7]
+    is_active: bool = True
+
+
+class AccessRuleCreate(AccessRuleBase):
+    pass
+
+
+class AccessRuleUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    door_id: Optional[str] = None
+    user_id: Optional[str] = None
+    department: Optional[str] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    allowed_days: Optional[List[int]] = None
+    is_active: Optional[bool] = None
+
+
+class AccessRuleOut(AccessRuleBase):
+    id: str
+    door_name: Optional[str] = None
+    user_name: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Role Schemas
+# ─────────────────────────────────────────────────────────────────────────────
+
+class RoleOut(BaseModel):
+    id: str
+    code: str
+    name: str
+    description: Optional[str] = None
+    permissions: List[str] = []
+    user_count: Optional[int] = 0
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RoleUpdatePermissions(BaseModel):
+    permissions: List[str]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Notification Schemas
+# ─────────────────────────────────────────────────────────────────────────────
+
+class NotificationCreate(BaseModel):
+    title: str
+    message: str
+    type: str = "info"  # info, warning, error, success
+    user_id: Optional[str] = None
+
+
+class NotificationOut(BaseModel):
+    id: str
+    title: str
+    message: str
+    type: str
+    is_read: bool
+    user_id: Optional[str] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class NotificationListResponse(BaseModel):
+    items: List[NotificationOut]
+    total: int
+    unread_count: int
+

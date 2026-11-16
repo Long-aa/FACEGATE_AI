@@ -71,7 +71,7 @@ def list_users(
     """
     List users with search, department/status filtering, and pagination.
     """
-    query = db.query(User)
+    query = db.query(User).filter(User.is_deleted == False)
 
     if q:
         search_str = f"%{q.strip()}%"
@@ -288,7 +288,10 @@ def get_user_detail(
     """
     Get detailed information of a single user.
     """
-    user = db.query(User).filter((User.id == user_id) | (User.employee_id == user_id)).first()
+    user = db.query(User).filter(
+        (User.id == user_id) | (User.employee_id == user_id),
+        User.is_deleted == False,
+    ).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -307,7 +310,10 @@ async def update_user(
     """
     Update user information, access areas, and avatar.
     """
-    user = db.query(User).filter((User.id == user_id) | (User.employee_id == user_id)).first()
+    user = db.query(User).filter(
+        (User.id == user_id) | (User.employee_id == user_id),
+        User.is_deleted == False,
+    ).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -345,6 +351,9 @@ async def update_user(
 
     if "role" in payload.model_fields_set and payload.role is not None:
         user.role = payload.role
+        role_record = db.query(Role).filter(Role.code == payload.role).first()
+        if role_record:
+            user.roles = [role_record]
 
     if "status" in payload.model_fields_set and payload.status is not None:
         valid_statuses = ("ACTIVE", "WAITING", "DRAFT", "LOCKED", "INACTIVE", "BLOCKED")
@@ -444,7 +453,10 @@ def update_user_status(
     """
     Update status of user (e.g. ACTIVE -> LOCKED, or LOCKED -> ACTIVE).
     """
-    user = db.query(User).filter((User.id == user_id) | (User.employee_id == user_id)).first()
+    user = db.query(User).filter(
+        (User.id == user_id) | (User.employee_id == user_id),
+        User.is_deleted == False,
+    ).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -485,7 +497,10 @@ async def delete_user(
     6. Delete User entity.
     7. Broadcast real-time WebSocket event USER_DELETED.
     """
-    user = db.query(User).filter((User.id == user_id) | (User.employee_id == user_id)).first()
+    user = db.query(User).filter(
+        (User.id == user_id) | (User.employee_id == user_id),
+        User.is_deleted == False,
+    ).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -533,8 +548,8 @@ async def delete_user(
     )
     db.add(audit)
 
-    # 5. Delete User
-    db.delete(user)
+    # 5. Soft Delete User (preserve data integrity)
+    user.is_deleted = True
     db.commit()
 
     # 6. Broadcast Real-time WebSocket Event
@@ -568,7 +583,10 @@ def get_user_access_history(
     """
     Get recent access history for a specific user from database.
     """
-    user = db.query(User).filter((User.id == user_id) | (User.employee_id == user_id)).first()
+    user = db.query(User).filter(
+        (User.id == user_id) | (User.employee_id == user_id),
+        User.is_deleted == False,
+    ).first()
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -52,7 +52,7 @@ def list_cameras(
     """
     List all cameras from database.
     """
-    query = db.query(Camera)
+    query = db.query(Camera).filter(Camera.is_deleted == False)
     if q:
         search_str = f"%{q.strip()}%"
         query = query.filter((Camera.name.ilike(search_str)) | (Camera.camera_code.ilike(search_str)))
@@ -124,7 +124,7 @@ def get_camera(
     """
     Get single camera details.
     """
-    cam = db.query(Camera).filter((Camera.id == camera_id) | (Camera.camera_code == camera_id)).first()
+    cam = db.query(Camera).filter(((Camera.id == camera_id) | (Camera.camera_code == camera_id)), Camera.is_deleted == False).first()
     if not cam:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -143,7 +143,7 @@ def update_camera(
     """
     Update camera configuration.
     """
-    cam = db.query(Camera).filter((Camera.id == camera_id) | (Camera.camera_code == camera_id)).first()
+    cam = db.query(Camera).filter(((Camera.id == camera_id) | (Camera.camera_code == camera_id)), Camera.is_deleted == False).first()
     if not cam:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -183,7 +183,7 @@ def delete_camera(
     """
     Delete a camera from the database.
     """
-    cam = db.query(Camera).filter((Camera.id == camera_id) | (Camera.camera_code == camera_id)).first()
+    cam = db.query(Camera).filter(((Camera.id == camera_id) | (Camera.camera_code == camera_id)), Camera.is_deleted == False).first()
     if not cam:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -199,7 +199,7 @@ def delete_camera(
         details={"camera_code": cam.camera_code, "name": cam.name},
     )
     db.add(audit)
-    db.delete(cam)
+    cam.is_deleted = True
     db.commit()
 
     return {"success": True, "message": f"Đã xóa camera {cam.name}"}
@@ -213,7 +213,7 @@ def test_camera_connection(
     """
     Test real connectivity to the camera stream or IP.
     """
-    cam = db.query(Camera).filter((Camera.id == camera_id) | (Camera.camera_code == camera_id)).first()
+    cam = db.query(Camera).filter(((Camera.id == camera_id) | (Camera.camera_code == camera_id)), Camera.is_deleted == False).first()
     if not cam:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -245,7 +245,7 @@ def toggle_camera_status(
     """
     Toggle camera status between Online and Offline.
     """
-    cam = db.query(Camera).filter((Camera.id == camera_id) | (Camera.camera_code == camera_id)).first()
+    cam = db.query(Camera).filter(((Camera.id == camera_id) | (Camera.camera_code == camera_id)), Camera.is_deleted == False).first()
     if not cam:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

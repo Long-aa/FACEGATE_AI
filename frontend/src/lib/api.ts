@@ -450,4 +450,85 @@ export const api = {
       }),
     me: () => request<any>("/api/v1/auth/me"),
   },
+
+  // ── 11. Access Rules ──────────────────────────────────────────
+  accessRules: {
+    list: (params?: { door_id?: string; department?: string; is_active?: boolean }) => {
+      const q = new URLSearchParams();
+      if (params?.door_id) q.set("door_id", params.door_id);
+      if (params?.department) q.set("department", params.department);
+      if (params?.is_active !== undefined) q.set("is_active", String(params.is_active));
+      const qs = q.toString();
+      return request<any[]>(`/api/v1/access-rules${qs ? `?${qs}` : ""}`);
+    },
+    get: (id: string) => request<any>(`/api/v1/access-rules/${id}`),
+    create: (data: any) =>
+      request<any>("/api/v1/access-rules", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: any) =>
+      request<any>(`/api/v1/access-rules/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      request<any>(`/api/v1/access-rules/${id}`, {
+        method: "DELETE",
+      }),
+  },
+
+  // ── 12. Roles ─────────────────────────────────────────────────
+  roles: {
+    list: () => request<any[]>("/api/v1/roles"),
+    get: (code: string) => request<any>(`/api/v1/roles/${code}`),
+    getAvailablePermissions: () => request<any[]>("/api/v1/roles/permissions/available"),
+    updatePermissions: (code: string, permissions: string[]) =>
+      request<any>(`/api/v1/roles/${code}/permissions`, {
+        method: "PUT",
+        body: JSON.stringify({ permissions }),
+      }),
+  },
+
+  // ── 13. Notifications ─────────────────────────────────────────
+  notifications: {
+    list: (params?: { unread_only?: boolean; limit?: number; offset?: number }) => {
+      const q = new URLSearchParams();
+      if (params?.unread_only) q.set("unread_only", "true");
+      if (params?.limit) q.set("limit", String(params.limit));
+      if (params?.offset) q.set("offset", String(params.offset));
+      const qs = q.toString();
+      return request<any>(`/api/v1/notifications${qs ? `?${qs}` : ""}`);
+    },
+    create: (data: { title: string; message: string; type?: string; user_id?: string }) =>
+      request<any>("/api/v1/notifications", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    markRead: (id: string) =>
+      request<any>(`/api/v1/notifications/${id}/read`, {
+        method: "POST",
+      }),
+    markAllRead: () =>
+      request<any>("/api/v1/notifications/read-all", {
+        method: "POST",
+      }),
+    delete: (id: string) =>
+      request<any>(`/api/v1/notifications/${id}`, {
+        method: "DELETE",
+      }),
+  },
+
+  // ── 14. System Logs & Diagnostics ─────────────────────────────
+  systemLogs: {
+    get: (params?: { level?: string; limit?: number; offset?: number }) => {
+      const q = new URLSearchParams();
+      if (params?.level) q.set("level", params.level);
+      if (params?.limit) q.set("limit", String(params.limit));
+      if (params?.offset) q.set("offset", String(params.offset));
+      const qs = q.toString();
+      return request<any>(`/api/v1/system-logs${qs ? `?${qs}` : ""}`);
+    },
+    getDiagnostics: () => request<any>("/api/v1/system-logs/diagnostics"),
+  },
 };
