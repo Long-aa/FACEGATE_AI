@@ -43,8 +43,8 @@ def get_dashboard_stats(
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    # 1. Total users
-    total_users = db.query(User).count()
+    # 1. Total active users (exclude soft-deleted)
+    total_users = db.query(User).filter(User.is_deleted == False).count()
 
     # 2. Today access logs
     today_entries = (
@@ -67,11 +67,11 @@ def get_dashboard_stats(
         .count()
     )
 
-    # 5. Cameras
-    total_cameras = db.query(Camera).count()
+    # 5. Cameras (exclude soft-deleted)
+    total_cameras = db.query(Camera).filter(Camera.is_deleted == False).count()
     active_cameras = (
         db.query(Camera)
-        .filter(Camera.status == "Online")
+        .filter(Camera.is_deleted == False, Camera.status == "Online")
         .count()
     )
 
@@ -178,7 +178,7 @@ def get_ai_engine_status(
     avg_conf = round(float(recent_stats.avg_conf), 1) if recent_stats and recent_stats.avg_conf else None
 
     # Check if there are active cameras
-    active_cams = db.query(Camera).filter(Camera.status == "Online").count()
+    active_cams = db.query(Camera).filter(Camera.is_deleted == False, Camera.status == "Online").count()
     is_live = active_cams > 0
 
     return AiEngineStatusOut(

@@ -21,7 +21,7 @@ interface Camera {
   ipAddress?: string;
 }
 
-function CameraFeedMock({ type, status }: { type: Camera["type"]; status: Camera["status"] }) {
+function CameraFeedPlaceholder({ type, status }: { type: Camera["type"]; status: Camera["status"] }) {
   if (status === "Offline") {
     return (
       <div style={{ position: "absolute", inset: 0, background: "#050d18", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
@@ -246,7 +246,7 @@ export default function CamerasPage() {
                 >
                   {/* Camera thumbnail */}
                   <div style={{ position: "relative", height: 160, overflow: "hidden" }}>
-                    <CameraFeedMock type={cam.type} status={cam.status} />
+                    <CameraFeedPlaceholder type={cam.type} status={cam.status} />
                     {/* Status badge */}
                     <div style={{
                       position: "absolute", top: 10, right: 10, display: "flex", alignItems: "center", gap: 5,

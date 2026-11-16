@@ -57,53 +57,6 @@ interface AccessLogItem {
   color: string;
 }
 
-const INITIAL_LOGS: AccessLogItem[] = [
-  {
-    id: "log-1",
-    time: "10:45:22",
-    initials: "NA",
-    name: "Nguyễn Văn An",
-    code: "EMP-2045",
-    checkpoint: "Camera 01 - Cửa chính",
-    confidence: 96.8,
-    status: "GRANTED",
-    color: "#00D4AA",
-  },
-  {
-    id: "log-2",
-    time: "10:42:15",
-    initials: "TB",
-    name: "Trần Thị B",
-    code: "EMP-2012",
-    checkpoint: "Camera 01 - Cửa chính",
-    confidence: 94.2,
-    status: "GRANTED",
-    color: "#38BDF8",
-  },
-  {
-    id: "log-3",
-    time: "10:38:05",
-    initials: "?",
-    name: "Unknown (Chưa xác định)",
-    code: "Không có dữ liệu",
-    checkpoint: "Camera 01 - Cửa chính",
-    confidence: 41.3,
-    status: "DENIED",
-    color: "#EF4444",
-  },
-  {
-    id: "log-4",
-    time: "10:30:00",
-    initials: "LC",
-    name: "Lê Văn C",
-    code: "EMP-2090",
-    checkpoint: "Camera 02 - Kho kỹ thuật",
-    confidence: 98.1,
-    status: "GRANTED",
-    color: "#3B82F6",
-  },
-];
-
 export interface AnalyticsData {
   range: string;
   total_access: number;
@@ -287,28 +240,28 @@ export default function DashboardPage() {
   const [latency, setLatency] = useState(32);
   const [fps, setFps] = useState(30);
 
-  // Real Database Data States
+  // Real Database Data States (loaded from API)
   const [stats, setStats] = useState<any>({
-    total_users: 6,
-    today_access_count: 60,
-    granted_count: 52,
-    denied_count: 8,
-    active_cameras: 6,
-    total_cameras: 6,
-    unresolved_alerts: 11,
-    success_rate: 86.7,
+    total_users: 0,
+    today_access_count: 0,
+    granted_count: 0,
+    denied_count: 0,
+    active_cameras: 0,
+    total_cameras: 0,
+    unresolved_alerts: 0,
+    success_rate: 0,
   });
 
   const [aiEngine, setAiEngine] = useState<any>({
     opencv_version: "4.8.0",
     face_model: "dlib_face_recognition_resnet_v1 (512D)",
-    cameras_online: 6,
-    cameras_total: 6,
+    cameras_online: 0,
+    cameras_total: 0,
     processing_fps: 30,
-    avg_confidence: 94.6,
-    processing_time_ms: 45,
-    inference_load: 38,
-    frame_buffer_load: 18,
+    avg_confidence: 95.0,
+    processing_time_ms: 35,
+    inference_load: 0,
+    frame_buffer_load: 0,
     is_online: true,
   });
 
