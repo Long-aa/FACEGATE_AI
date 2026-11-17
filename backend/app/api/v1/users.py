@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import math
 import re
 from typing import Any, Optional
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -151,7 +152,7 @@ async def create_user(
                 detail=f"Mã nhân viên '{employee_id}' không đúng định dạng quy chuẩn (3-30 ký tự gồm chữ cái, số, gạch nối hoặc gạch dưới).",
             )
         # Check duplicate employee_id
-        if db.query(User).filter(User.employee_id == employee_id).first():
+        if db.query(User).filter(User.employee_id == employee_id, User.is_deleted == False).first():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Mã nhân viên '{employee_id}' đã tồn tại trong hệ thống.",
@@ -166,7 +167,7 @@ async def create_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Email '{email}' không đúng định dạng.",
             )
-        if db.query(User).filter(User.email == email).first():
+        if db.query(User).filter(User.email == email, User.is_deleted == False).first():
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Email '{email}' đã được sử dụng bởi người dùng khác.",
@@ -335,7 +336,7 @@ async def update_user(
             email_pattern = r"^[\w\.\+\-]+@[\w\-]+\.[a-zA-Z]{2,}$"
             if not re.match(email_pattern, email):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Email '{email}' không đúng định dạng.")
-            dup = db.query(User).filter(User.email == email, User.id != user.id).first()
+            dup = db.query(User).filter(User.email == email, User.id != user.id, User.is_deleted == False).first()
             if dup:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Email '{email}' đã được sử dụng.")
         user.email = email
@@ -548,8 +549,12 @@ async def delete_user(
     )
     db.add(audit)
 
-    # 5. Soft Delete User (preserve data integrity)
+    # 5. Soft Delete User (preserve data integrity and free unique email & employee_id for reuse)
     user.is_deleted = True
+    user.status = "DELETED"
+    if user.email:
+        user.email = f"deleted_{uuid.uuid4().hex[:8]}_{user.email}"
+    user.employee_id = f"DEL_{uuid.uuid4().hex[:8]}_{employee_code}"
     db.commit()
 
     # 6. Broadcast Real-time WebSocket Event

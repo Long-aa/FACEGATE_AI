@@ -98,6 +98,7 @@ class EnrollFaceRequest(BaseModel):
     master_photo_url: Optional[str] = None
     registered_by: Optional[str] = "Admin"
     notes: Optional[str] = None
+    overwrite: Optional[bool] = False
 
 
 def _validate_precheck_employee(employee_id: Optional[str], db: Session) -> dict:
@@ -390,12 +391,12 @@ async def enroll_face_profile(
             detail="Nhân viên đang ở trạng thái ngừng hoạt động/bị khóa",
         )
 
-    # 5. IT02-04: Check prior active face registration in DB
+    # 5. IT02-04: Check prior active face registration in DB (allow update if overwrite=True)
     existing_profile = db.query(FaceProfile).filter(
         FaceProfile.employee_id == clean_id,
         FaceProfile.status == "ACTIVE",
     ).first()
-    if existing_profile and existing_profile.has_vector():
+    if existing_profile and existing_profile.has_vector() and not payload.overwrite:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Nhân viên đã đăng ký khuôn mặt trước đó",

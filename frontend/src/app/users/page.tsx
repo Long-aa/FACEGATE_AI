@@ -2234,13 +2234,14 @@ export default function UsersPage() {
         master_photo_url: photoUrl,
       }).catch(() => {});
 
-      // 3. Register face profile in backend database
+      // 3. Register face profile in backend database (allow update/re-enroll)
       await api.faces.enroll({
         employee_id: modal.user.employeeId,
         encoding_vector: vec,
         quality_score: 0.98,
         samples_count: 30,
         master_photo_url: photoUrl,
+        overwrite: true,
       });
 
       // 4. Update user avatar + kích hoạt status ACTIVE (đồng bộ với /users/enroll)

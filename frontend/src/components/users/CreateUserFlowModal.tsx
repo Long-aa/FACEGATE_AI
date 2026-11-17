@@ -606,6 +606,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
         quality_score: 0.98,
         samples_count: 30,
         master_photo_url: photoUrl,
+        overwrite: true,
       });
 
       stopCamera();

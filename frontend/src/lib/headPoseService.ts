@@ -351,6 +351,11 @@ class HeadPoseDetector {
       yaw = -yaw;
     }
 
+    // Invert pitch: MediaPipe Y-axis points downwards in image space, making raw upward tilt
+    // negative and downward tilt positive. Inverting pitch aligns with standard convention:
+    // Positive (+10°) = Ngửa nhẹ (Tilt Up), Negative (-10°) = Cúi nhẹ (Tilt Down).
+    pitch = -pitch;
+
     return {
       yaw: Math.round(yaw * 10) / 10,
       pitch: Math.round(pitch * 10) / 10,

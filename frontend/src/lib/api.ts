@@ -47,6 +47,12 @@ async function request<T>(
   }
 
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== "undefined" && !endpoint.includes("/auth/login")) {
+      localStorage.removeItem("facegate_session");
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
     let errorDetail = `Lỗi hệ thống (${response.status})`;
     try {
       const errorJson = await response.json();
@@ -426,6 +432,7 @@ export const api = {
       quality_score?: number;
       samples_count?: number;
       master_photo_url?: string;
+      overwrite?: boolean;
     }) =>
       request<any>("/api/v1/faces/enroll", {
         method: "POST",

@@ -358,8 +358,8 @@ export default function EnrollPage() {
       const dForehead = Math.hypot(nose.x - forehead.x, nose.y - forehead.y);
       const dChin = Math.hypot(nose.x - chin.x, nose.y - chin.y);
       const pitchRatio = (dChin - dForehead) / (dChin + dForehead + 0.0001);
-      // Centered around neutral pose
-      const curPitch = Number(((pitchRatio - 0.05) * 58).toFixed(1));
+      // Centered around neutral pose (inverted so Up/Ngửa > 0, Down/Cúi < 0)
+      const curPitch = Number((-((pitchRatio - 0.05) * 58)).toFixed(1));
 
       // Roll: tilt angle between the eyes
       const curRoll = Number(
@@ -617,6 +617,7 @@ export default function EnrollPage() {
         quality_score: quality.total > 0 ? Number((quality.total / 100).toFixed(2)) : 0.98,
         samples_count: 30,
         master_photo_url: user?.avatarUrl || undefined,
+        overwrite: true,
       });
 
       // 2. Cập nhật trạng thái người dùng thành ACTIVE và lưu avatar (đồng bộ với FaceEnrollModal)

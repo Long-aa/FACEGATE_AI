@@ -26,5 +26,5 @@ echo - AI Micro:  http://localhost:8001
 echo.
 echo Tai khoan dang nhap: admin@facegate.ai / Admin@123
 echo ===================================================
-pause
+timeout /t 3 > nul 2>&1 || ping 127.0.0.1 -n 3 > nul
 
