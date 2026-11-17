@@ -1,4 +1,4 @@
-﻿"""
+"""
 Custom exceptions for FaceGate AI - Face Registration Flow.
 Covers all exceptions referenced in FRM01 through FRM08 unit tests.
 """

@@ -3,7 +3,7 @@ Database session and connection management for FaceGate AI.
 """
 from typing import Generator
 from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, Session
 from app.core.config import settings
 
 # Create SQLAlchemy engine connected to PostgreSQL on port 8000
@@ -22,8 +22,9 @@ SessionLocal = sessionmaker(
     bind=engine,
 )
 
-# Declarative base for all SQLAlchemy models
-Base = declarative_base()
+# Declarative base class for all SQLAlchemy models (SQLAlchemy 2.0 type-safe)
+class Base(DeclarativeBase):
+    pass
 
 
 def get_db() -> Generator[Session, None, None]:

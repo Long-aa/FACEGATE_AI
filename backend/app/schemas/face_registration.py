@@ -1,4 +1,4 @@
-﻿"""
+"""
 Pydantic schemas for the Face Registration flow (FRM01-FRM08).
 """
 from __future__ import annotations

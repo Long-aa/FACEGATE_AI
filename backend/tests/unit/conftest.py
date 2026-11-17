@@ -1,4 +1,4 @@
-﻿"""
+"""
 Shared pytest fixtures for FRM01-FRM08 unit tests.
 All external dependencies (DB, camera, AI model) are mocked.
 """

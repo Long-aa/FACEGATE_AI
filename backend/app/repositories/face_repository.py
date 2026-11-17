@@ -1,4 +1,4 @@
-﻿"""
+"""
 Abstract repository interface for face registration DB operations.
 Concrete implementations are injected at runtime; unit tests use mocks.
 """
