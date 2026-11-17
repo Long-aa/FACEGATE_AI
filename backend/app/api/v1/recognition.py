@@ -1,9 +1,4 @@
-"""
-Face recognition verification and event logging endpoints for FaceGate AI.
-Processes real verification checks against PostgreSQL face profiles, checks door permissions,
-records AccessLog entries, raises Alerts, controls Door state with fail-safe priorities,
-and broadcasts events via WebSocket.
-"""
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 import math
@@ -221,17 +216,19 @@ async def verify_recognition(
     except Exception as e:
         logger.debug(f"Could not load dynamic system_settings: {e}")
 
-    # Dynamic recognition threshold
+    # Dynamic recognition threshold (supports UI dot-notation and DB underscore-notation)
+    raw_thresh = None
     if payload.threshold is not None:
-        threshold_val = payload.threshold
-    elif "recognition_threshold" in sys_settings:
+        raw_thresh = payload.threshold
+    else:
+        for k in ("recognition.threshold", "recognition_threshold", "detection_threshold", "recognition.similarity_threshold", "similarity_threshold"):
+            if k in sys_settings and sys_settings[k] is not None:
+                raw_thresh = sys_settings[k]
+                break
+
+    if raw_thresh is not None:
         try:
-            threshold_val = float(sys_settings["recognition_threshold"])
-        except (ValueError, TypeError):
-            threshold_val = 0.60
-    elif "similarity_threshold" in sys_settings:
-        try:
-            threshold_val = float(sys_settings["similarity_threshold"])
+            threshold_val = float(raw_thresh)
         except (ValueError, TypeError):
             threshold_val = 0.60
     else:

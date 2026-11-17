@@ -85,6 +85,16 @@ export default function CamerasPage() {
     setPreviewCamera(null);
   }, [stopPreviewWebcam]);
 
+  // Cleanup preview webcam stream on unmount
+  useEffect(() => {
+    return () => {
+      if (previewStreamRef.current) {
+        previewStreamRef.current.getTracks().forEach((track) => track.stop());
+        previewStreamRef.current = null;
+      }
+    };
+  }, []);
+
   const toggleWebcamPreview = useCallback(async () => {
     if (useWebcamPreview) {
       stopPreviewWebcam();

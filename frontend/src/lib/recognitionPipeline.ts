@@ -233,6 +233,7 @@ export class RecognitionPipelineController {
   private lastVerificationResult: VerificationResult | null = null;
   private blinkCounter = 0;
   private lastCallTime = 0;
+  private isVerifying = false;
 
   // Alert and recognition session tracking:
   // 1. "Người không xác định": gửi cảnh báo về hệ thống 5s một lần (5000ms)
@@ -472,9 +473,10 @@ export class RecognitionPipelineController {
       return emptyAnalysis;
     }
 
-    // Call API at throttled intervals (every 250ms) to update multi-frame buffer
-    if (now - this.lastCallTime > 250) {
+    // Call API at throttled intervals (every 250ms) to update multi-frame buffer (no overlapping requests)
+    if (now - this.lastCallTime > 250 && !this.isVerifying) {
       this.lastCallTime = now;
+      this.isVerifying = true;
       this.state = "RECOGNIZING";
 
       try {
@@ -615,6 +617,8 @@ export class RecognitionPipelineController {
       } catch (err: any) {
         console.error("Verification call error:", err);
         emptyAnalysis.statusText = "LỖI KẾT NỐI MÁY CHỦ • CỬA TIẾP TỤC KHÓA (FAIL-SAFE)";
+      } finally {
+        this.isVerifying = false;
       }
     }
 

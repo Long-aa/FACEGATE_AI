@@ -1,9 +1,10 @@
+
 """
 System settings API endpoints for FaceGate AI.
 Provides persistence of all system parameters, thresholds, and configurations directly in PostgreSQL.
 """
 from typing import Any, Dict
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_active_admin, get_current_user
@@ -16,26 +17,90 @@ from app.schemas.common import SystemSettingsOut, SystemSettingsUpdate
 router = APIRouter()
 
 
+def _extract_scalar(v: Any) -> Any:
+    """Extract primitive value from JSONB wrapped dict or return scalar directly."""
+    if isinstance(v, dict):
+        for k in ("value", "threshold", "seconds", "mode", "enabled"):
+            if k in v:
+                return v[k]
+        if len(v) == 1:
+            return list(v.values())[0]
+    return v
+
+
 def _get_settings_dict(db: Session) -> Dict[str, Any]:
     rows = db.query(SystemSetting).all()
-    settings_dict = {}
-    for r in rows:
-        settings_dict[r.key] = r.value
+    raw_dict: Dict[str, Any] = {r.key: _extract_scalar(r.value) for r in rows}
 
-    # Defaults if table was not fully seeded
-    defaults = {
-        "detection_threshold": 0.65,
+    # Canonical threshold & parameter resolution
+    rec_thresh = (
+        raw_dict.get("recognition.threshold")
+        or raw_dict.get("recognition_threshold")
+        or raw_dict.get("detection_threshold")
+        or 0.60
+    )
+    try:
+        rec_thresh_val = float(rec_thresh)
+    except (ValueError, TypeError):
+        rec_thresh_val = 0.60
+
+    sim_thresh = (
+        raw_dict.get("recognition.similarity_threshold")
+        or raw_dict.get("similarity_threshold")
+        or 0.82
+    )
+    try:
+        sim_thresh_val = float(sim_thresh)
+    except (ValueError, TypeError):
+        sim_thresh_val = 0.82
+
+    ai_model = (
+        raw_dict.get("recognition.model")
+        or raw_dict.get("ai_model")
+        or "MobileNet v3 (Fast)"
+    )
+
+    door_dur = (
+        raw_dict.get("door_unlock_duration")
+        or raw_dict.get("auto_lock_delay")
+        or 10
+    )
+
+    settings_dict = dict(raw_dict)
+
+    # Harmonize aliases across UI modules (settings/page.tsx, recognition/page.tsx, and backend recognition pipeline)
+    settings_dict["recognition.threshold"] = str(rec_thresh_val)
+    settings_dict["recognition_threshold"] = rec_thresh_val
+    settings_dict["detection_threshold"] = rec_thresh_val
+
+    settings_dict["recognition.similarity_threshold"] = str(sim_thresh_val)
+    settings_dict["similarity_threshold"] = sim_thresh_val
+
+    settings_dict["recognition.model"] = str(ai_model)
+    settings_dict["ai_model"] = str(ai_model)
+
+    settings_dict["door_unlock_duration"] = door_dur
+    settings_dict["auto_lock_delay"] = door_dur
+
+    # Defaults if missing
+    defaults: Dict[str, Any] = {
         "min_face_size": 60,
         "max_face_size": 300,
-        "ai_model": "MobileNet v3 (Fast)",
-        "similarity_threshold": 0.82,
+        "recognition.min_face_size": "60",
+        "recognition.max_face_size": "300",
         "confidence_score": 0.90,
+        "recognition.confidence_required": "0.90",
         "resolution": "1280 × 720 (720p)",
+        "camera.resolution": "1280 × 720 (720p)",
         "target_fps": 15,
+        "camera.fps": "15",
         "tensor_rt": True,
+        "system.tensorrt": "true",
         "auto_lock": True,
-        "auto_lock_delay": 5,
-        "multi_face_mode": "largest_face",
+        "system.auto_lock_on_threat": "true",
+        "alert_sound": True,
+        "system.alert_sound": "true",
+        "multi_face_mode": "reject_multi",
         "save_failed_photos": True,
         "alert_unknown_faces": True,
         "alert_low_confidence": True,
@@ -55,7 +120,7 @@ def get_settings(
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    Retrieve all system settings from database as a dictionary.
+    Retrieve all system settings from database as a unified dictionary.
     """
     return SystemSettingsOut(settings=_get_settings_dict(db))
 
@@ -67,22 +132,50 @@ def update_settings(
     db: Session = Depends(get_db),
 ) -> Any:
     """
-    Update or create system settings in database.
+    Update or create system settings in database with bidirectional key synchronization.
     """
-    for key, val in payload.settings.items():
+    update_items = dict(payload.settings)
+
+    # Sync aliases bidirectionally so both dot-notation and underscore keys are kept in sync
+    if "recognition.threshold" in update_items:
+        val = update_items["recognition.threshold"]
+        update_items["recognition_threshold"] = val
+        update_items["detection_threshold"] = val
+    elif "recognition_threshold" in update_items:
+        val = update_items["recognition_threshold"]
+        update_items["recognition.threshold"] = str(val)
+        update_items["detection_threshold"] = val
+    elif "detection_threshold" in update_items:
+        val = update_items["detection_threshold"]
+        update_items["recognition.threshold"] = str(val)
+        update_items["recognition_threshold"] = val
+
+    if "recognition.similarity_threshold" in update_items:
+        val = update_items["recognition.similarity_threshold"]
+        update_items["similarity_threshold"] = val
+    elif "similarity_threshold" in update_items:
+        val = update_items["similarity_threshold"]
+        update_items["recognition.similarity_threshold"] = str(val)
+
+    if "recognition.model" in update_items:
+        val = update_items["recognition.model"]
+        update_items["ai_model"] = val
+    elif "ai_model" in update_items:
+        val = update_items["ai_model"]
+        update_items["recognition.model"] = str(val)
+
+    for key, val in update_items.items():
         setting = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+        val_to_store = val if isinstance(val, dict) else {"value": val}
         if not setting:
             setting = SystemSetting(
                 key=key,
-                value=val if isinstance(val, dict) else {"value": val},
+                value=val_to_store,
                 category="general",
             )
             db.add(setting)
         else:
-            if isinstance(val, dict):
-                setting.value = val
-            else:
-                setting.value = {"value": val}
+            setting.value = val_to_store
 
     audit = AuditLog(
         action="SETTINGS_UPDATE",
