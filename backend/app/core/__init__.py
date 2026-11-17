@@ -1,16 +1,8 @@
 """
-Core configuration, logging, security, and exception infrastructure for FaceGate AI.
+Core configuration, logging, and exception infrastructure for FaceGate AI.
 """
 from app.core.config import settings
 from app.core.logging import JsonFormatter, get_logger, setup_logging
-from app.core.security import (
-    create_access_token,
-    get_current_active_admin,
-    get_current_user,
-    get_current_user_or_service,
-    verify_password,
-    get_password_hash,
-)
 from app.core.exceptions import (
     FaceGateException,
     ValidationError,
@@ -40,12 +32,6 @@ __all__ = [
     "setup_logging",
     "get_logger",
     "JsonFormatter",
-    "create_access_token",
-    "get_current_user",
-    "get_current_active_admin",
-    "get_current_user_or_service",
-    "verify_password",
-    "get_password_hash",
     "FaceGateException",
     "ValidationError",
     "NotFoundException",
