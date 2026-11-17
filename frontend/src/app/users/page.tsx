@@ -8,6 +8,7 @@ import { CreateUserFlowModal } from "@/components/users/CreateUserFlowModal";
 import { toast as notify } from "@/components/ui/ToastNotification";
 import { useRealtimeEvents, RealtimeEventPayload } from "@/lib/useRealtimeEvents";
 import { uploadAvatarToSupabase, syncFaceProfileToSupabase } from "@/lib/supabase";
+import { compressImageFile } from "@/lib/imageOptimizer";
 import {
   headPoseDetector,
   HeadPoseStep,
@@ -392,14 +393,16 @@ function EditModal({
     if (!file) return;
     setUploadingAvatar(true);
     try {
-      const reader = new FileReader();
-      reader.onload = () => {
-        setForm(f => ({ ...f, avatarUrl: String(reader.result) }));
-        notify.success("Đã chọn ảnh đại diện mới. Bấm 'Lưu thay đổi vào CSDL' để lưu trữ.", "ẢNH ĐẠI DIỆN");
-      };
-      reader.readAsDataURL(file);
+      const compressed = await compressImageFile(file, {
+        maxWidth: 800,
+        maxHeight: 800,
+        quality: 0.82,
+        maxSizeBytes: 150 * 1024,
+      });
+      setForm(f => ({ ...f, avatarUrl: compressed }));
+      notify.success("Đã chọn & tối ưu ảnh đại diện (< 150KB). Bấm 'Lưu thay đổi' để lưu.", "ẢNH ĐẠI DIỆN");
     } catch (err: any) {
-      notify.error("Không thể đọc tệp ảnh đã chọn!", "LỖI TẢI ẢNH");
+      notify.error("Không thể đọc/nén tệp ảnh đã chọn!", "LỖI TẢI ẢNH");
     } finally {
       setUploadingAvatar(false);
     }

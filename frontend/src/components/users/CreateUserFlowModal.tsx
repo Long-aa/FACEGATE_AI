@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { api } from "@/lib/api";
 import { toast } from "@/components/ui/ToastNotification";
 import { uploadAvatarToSupabase, syncFaceProfileToSupabase } from "@/lib/supabase";
+import { compressImageFile, compressImageBase64 } from "@/lib/imageOptimizer";
 import {
   headPoseDetector,
   HeadPoseStep,
@@ -127,11 +128,21 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
   };
 
   // Handle local avatar upload
-  const handleUploadAvatar = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUploadAvatar = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const url = URL.createObjectURL(file);
-      setAvatarPreview(url);
+      try {
+        const compressed = await compressImageFile(file, {
+          maxWidth: 800,
+          maxHeight: 800,
+          quality: 0.82,
+          maxSizeBytes: 150 * 1024,
+        });
+        setAvatarPreview(compressed);
+        toast.success("Ảnh đã được nén & tối ưu (< 150KB).", "ẢNH ĐẠI DIỆN");
+      } catch {
+        toast.error("Không thể đọc/nén tệp ảnh!", "LỖI TẢI ẢNH");
+      }
     }
   };
 
@@ -357,7 +368,7 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
   }, [step, isCameraActive, activePoseIdx, autoCapture, isMirrored, enrollFrames]);
 
   // Take snapshot from webcam
-  const handleSnapshotWebcam = () => {
+  const handleSnapshotWebcam = async () => {
     if (!videoRef.current || !isCameraActive) {
       toast.info("Vui lòng bấm 'Bật Camera quét khuôn mặt ngay' trước khi chụp ảnh thẻ!", "CAMERA CHƯA SẴN SÀNG");
       return;
@@ -369,7 +380,19 @@ export function CreateUserFlowModal({ onClose, onSuccess }: CreateUserFlowModalP
     if (ctx) {
       ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
       const dataUrl = canvas.toDataURL("image/jpeg");
-      setAvatarPreview(dataUrl);
+      try {
+        const compressed = await compressImageBase64(dataUrl, {
+          maxWidth: 800,
+          maxHeight: 800,
+          quality: 0.82,
+          maxSizeBytes: 150 * 1024,
+        });
+        setAvatarPreview(compressed);
+        toast.success("Đã chụp & tối ưu ảnh thẻ từ webcam (< 150KB).", "CHỤP ẢNH");
+      } catch {
+        setAvatarPreview(dataUrl);
+        toast.info("Đã chụp ảnh thẻ từ webcam.", "CHỤP ẢNH");
+      }
     }
   };
 
