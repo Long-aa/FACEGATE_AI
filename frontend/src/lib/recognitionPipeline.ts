@@ -278,6 +278,29 @@ export class RecognitionPipelineController {
   }
 
   /**
+   * Captures an optimized JPEG snapshot of the current video frame for high-accuracy
+   * server-side 512D ArcFace feature extraction & MiniFASNet anti-spoofing verification.
+   */
+  private captureFrameSnapshot(): string | undefined {
+    if (!this.videoEl || !this.videoEl.videoWidth || !this.videoEl.videoHeight) {
+      return undefined;
+    }
+    try {
+      const canvas = document.createElement("canvas");
+      const targetWidth = Math.min(this.videoEl.videoWidth, 640);
+      const targetHeight = Math.round((this.videoEl.videoHeight / this.videoEl.videoWidth) * targetWidth);
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return undefined;
+      ctx.drawImage(this.videoEl, 0, 0, targetWidth, targetHeight);
+      return canvas.toDataURL("image/jpeg", 0.75);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Main per-frame process loop called via requestAnimationFrame.
    */
   public async processFrame(): Promise<FrameAnalysis> {
@@ -455,9 +478,11 @@ export class RecognitionPipelineController {
       this.state = "RECOGNIZING";
 
       try {
+        const imageBase64 = this.captureFrameSnapshot();
         const verifyResp = await api.recognition.verify({
           camera_id: this.targetCameraId || undefined,
           door_id: this.targetDoorId || undefined,
+          image_base64: imageBase64,
           face_vector: faceVector,
           liveness_score: livenessScore,
           liveness_passed: livenessPassed,

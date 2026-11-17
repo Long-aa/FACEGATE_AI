@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { Sidebar } from "@/components/navigation/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { api } from "@/lib/api";
@@ -64,6 +64,47 @@ export default function CamerasPage() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [cameraToDelete, setCameraToDelete] = useState<Camera | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [previewCamera, setPreviewCamera] = useState<Camera | null>(null);
+  const [useWebcamPreview, setUseWebcamPreview] = useState(false);
+  const previewVideoRef = useRef<HTMLVideoElement>(null);
+  const previewStreamRef = useRef<MediaStream | null>(null);
+
+  const stopPreviewWebcam = useCallback(() => {
+    if (previewStreamRef.current) {
+      previewStreamRef.current.getTracks().forEach((track) => track.stop());
+      previewStreamRef.current = null;
+    }
+    if (previewVideoRef.current) {
+      previewVideoRef.current.srcObject = null;
+    }
+    setUseWebcamPreview(false);
+  }, []);
+
+  const closePreviewModal = useCallback(() => {
+    stopPreviewWebcam();
+    setPreviewCamera(null);
+  }, [stopPreviewWebcam]);
+
+  const toggleWebcamPreview = useCallback(async () => {
+    if (useWebcamPreview) {
+      stopPreviewWebcam();
+    } else {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        previewStreamRef.current = stream;
+        if (previewVideoRef.current) {
+          previewVideoRef.current.srcObject = stream;
+          await previewVideoRef.current.play();
+        }
+        setUseWebcamPreview(true);
+      } catch (err) {
+        console.warn("Could not start webcam stream:", err);
+        toast.error("Không thể mở Webcam máy tính: " + String(err));
+      }
+    }
+  }, [useWebcamPreview, stopPreviewWebcam]);
 
   // Load real cameras from DB
   const loadCameras = useCallback(async () => {
@@ -290,7 +331,7 @@ export default function CamerasPage() {
                     {/* Actions */}
                     <div style={{ display: "flex", gap: 8 }}>
                       <button
-                        onClick={() => router.push("/recognition")}
+                        onClick={() => setPreviewCamera(cam)}
                         style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5, padding: "8px", background: "rgba(0,212,170,0.08)", border: "1px solid rgba(0,212,170,0.2)", borderRadius: 8, color: "var(--accent-teal)", fontSize: 12, fontWeight: 500, cursor: "pointer" }}
                       >
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -520,6 +561,180 @@ export default function CamerasPage() {
                 style={{ flex: 1.5, padding: "10px", background: "linear-gradient(135deg, #EF4444, #B91C1C)", border: "none", borderRadius: 10, color: "white", fontSize: 13, fontWeight: 700, cursor: deletingId ? "not-allowed" : "pointer", boxShadow: "0 4px 15px rgba(239, 68, 68, 0.35)", opacity: deletingId ? 0.7 : 1 }}
               >
                 {deletingId ? "Đang xóa..." : "Xóa camera ngay"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Live Stream Preview Modal */}
+      {previewCamera && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 1100, background: "rgba(0,0,0,0.85)", backdropFilter: "blur(10px)",
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
+        }}>
+          <div style={{
+            background: "#08101d", border: "1px solid rgba(0, 212, 170, 0.35)",
+            borderRadius: 20, width: "100%", maxWidth: 840, overflow: "hidden",
+            boxShadow: "0 25px 60px rgba(0, 0, 0, 0.9), 0 0 40px rgba(0, 212, 170, 0.15)",
+            display: "flex", flexDirection: "column",
+          }}>
+            {/* Modal Header */}
+            <div style={{
+              padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
+              borderBottom: "1px solid rgba(255, 255, 255, 0.08)", background: "rgba(255, 255, 255, 0.02)",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{
+                  width: 10, height: 10, borderRadius: "50%",
+                  background: previewCamera.status === "Online" ? "#22C55E" : "#EF4444",
+                  boxShadow: previewCamera.status === "Online" ? "0 0 10px #22C55E" : "none",
+                }} />
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#F8FAFC" }}>
+                    Camera {previewCamera.camId} – {previewCamera.name}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#94A3B8", marginTop: 2, fontFamily: "monospace" }}>
+                    {previewCamera.rtspUrl || previewCamera.ipAddress || "RTSP Stream: 192.168.1.100:554/live"}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={toggleWebcamPreview}
+                  style={{
+                    padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                    background: useWebcamPreview ? "rgba(0, 212, 170, 0.2)" : "rgba(255, 255, 255, 0.06)",
+                    border: `1px solid ${useWebcamPreview ? "#00D4AA" : "rgba(255, 255, 255, 0.12)"}`,
+                    color: useWebcamPreview ? "#00D4AA" : "#CBD5E1", cursor: "pointer",
+                    display: "flex", alignItems: "center", gap: 6,
+                  }}
+                >
+                  <span>📷</span>
+                  {useWebcamPreview ? "Tắt Webcam" : "Thử nghiệm Webcam"}
+                </button>
+                <button
+                  type="button"
+                  onClick={closePreviewModal}
+                  style={{
+                    background: "rgba(255, 255, 255, 0.06)", border: "none", color: "#94A3B8",
+                    width: 32, height: 32, borderRadius: 8, fontSize: 18, cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                  }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Viewport Screen */}
+            <div style={{
+              position: "relative", width: "100%", height: 440, background: "#020610",
+              overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              {useWebcamPreview ? (
+                <video
+                  ref={previewVideoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              ) : previewCamera.status === "Online" ? (
+                <div style={{
+                  position: "absolute", inset: 0,
+                  background: "radial-gradient(ellipse at 50% 50%, #0a1f33 0%, #020610 80%)",
+                  display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+                }}>
+                  {/* Grid Lines Overlay */}
+                  <div style={{
+                    position: "absolute", inset: 0,
+                    backgroundImage: "linear-gradient(rgba(0,212,170,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(0,212,170,0.05) 1px, transparent 1px)",
+                    backgroundSize: "40px 40px",
+                  }} />
+
+                  {/* Surveillance Target Box */}
+                  <div style={{
+                    width: 180, height: 220, border: "2px dashed rgba(0, 212, 170, 0.5)",
+                    borderRadius: 12, position: "relative", display: "flex", alignItems: "center", justifyContent: "center",
+                  }}>
+                    <div style={{ position: "absolute", top: -10, left: 10, background: "#020610", padding: "0 6px", fontSize: 10, color: "#00D4AA", fontWeight: 700 }}>
+                      AI ROI DETECTION
+                    </div>
+                    <div style={{ width: 12, height: 12, border: "1px solid #00D4AA", borderRadius: "50%", opacity: 0.7 }} />
+                  </div>
+
+                  <div style={{ position: "absolute", bottom: 16, left: 20, color: "#00D4AA", fontSize: 11, fontWeight: 700, letterSpacing: "0.08em" }}>
+                    ● LIVE RTSP FEED • {previewCamera.resolution} @ {previewCamera.fps} FPS
+                  </div>
+                  <div style={{ position: "absolute", bottom: 16, right: 20, color: "rgba(255,255,255,0.4)", fontSize: 11, fontFamily: "monospace" }}>
+                    LATENCY: {previewCamera.latency}ms • BITRATE: 4096 Kbps
+                  </div>
+                </div>
+              ) : (
+                <div style={{ textAlign: "center", color: "#EF4444", padding: 20 }}>
+                  <div style={{ fontSize: 36, marginBottom: 8 }}>⚠️</div>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>TÍN HIỆU CAMERA NGOẠI TUYẾN</div>
+                  <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 4 }}>
+                    Không nhận được tín hiệu RTSP từ thiết bị này. Vui lòng kiểm tra cáp mạng hoặc nguồn điện.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer Controls */}
+            <div style={{
+              padding: "14px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
+              borderTop: "1px solid rgba(255, 255, 255, 0.08)", background: "rgba(255, 255, 255, 0.02)",
+            }}>
+              <div style={{ display: "flex", gap: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => handleTestCamera(previewCamera.id)}
+                  disabled={testingId === previewCamera.id}
+                  style={{
+                    padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                    background: "rgba(255, 255, 255, 0.06)", border: "1px solid var(--border)",
+                    color: "var(--text-primary)", cursor: "pointer",
+                  }}
+                >
+                  {testingId === previewCamera.id ? "Đang kiểm tra..." : "Ping kiểm tra kết nối"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleToggleStatus(previewCamera.id);
+                    setPreviewCamera({
+                      ...previewCamera,
+                      status: previewCamera.status === "Online" ? "Offline" : "Online",
+                    });
+                  }}
+                  style={{
+                    padding: "8px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                    background: "rgba(255, 255, 255, 0.06)", border: "1px solid var(--border)",
+                    color: previewCamera.status === "Online" ? "#EF4444" : "#22C55E", cursor: "pointer",
+                  }}
+                >
+                  {previewCamera.status === "Online" ? "Ngắt kết nối (Tắt)" : "Kích hoạt (Bật)"}
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  closePreviewModal();
+                  router.push("/recognition");
+                }}
+                style={{
+                  padding: "8px 18px", borderRadius: 8, fontSize: 12, fontWeight: 700,
+                  background: "linear-gradient(135deg, #00D4AA, #0284C7)", border: "none",
+                  color: "#050D18", cursor: "pointer", display: "flex", alignItems: "center", gap: 6,
+                }}
+              >
+                <span>🚀</span>
+                Mở trong Trình Nhận diện AI
               </button>
             </div>
           </div>

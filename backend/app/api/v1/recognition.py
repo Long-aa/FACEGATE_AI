@@ -24,6 +24,7 @@ from app.models.alert import Alert
 from app.models.camera import Camera
 from app.models.door import Door
 from app.models.face import FaceProfile
+from app.models.setting import SystemSetting
 from app.models.user import User
 from app.websocket.manager import ws_manager
 
@@ -206,7 +207,35 @@ async def verify_recognition(
     9. Broadcast real-time update to all connected WebSocket clients.
     """
     now = datetime.now(timezone.utc)
-    threshold_val = payload.threshold if payload.threshold is not None else 0.60
+
+    # Dynamic settings from PostgreSQL
+    sys_settings: dict = {}
+    try:
+        setting_rows = db.query(SystemSetting).all()
+        for s in setting_rows:
+            v = s.value
+            if isinstance(v, dict):
+                sys_settings[s.key] = v.get("value", v.get("threshold", v.get("seconds", v)))
+            else:
+                sys_settings[s.key] = v
+    except Exception as e:
+        logger.debug(f"Could not load dynamic system_settings: {e}")
+
+    # Dynamic recognition threshold
+    if payload.threshold is not None:
+        threshold_val = payload.threshold
+    elif "recognition_threshold" in sys_settings:
+        try:
+            threshold_val = float(sys_settings["recognition_threshold"])
+        except (ValueError, TypeError):
+            threshold_val = 0.60
+    elif "similarity_threshold" in sys_settings:
+        try:
+            threshold_val = float(sys_settings["similarity_threshold"])
+        except (ValueError, TypeError):
+            threshold_val = 0.60
+    else:
+        threshold_val = 0.60
 
     # 1. Resolve Door and Camera
     door = None
@@ -234,19 +263,21 @@ async def verify_recognition(
     if not door:
         raise HTTPException(status_code=500, detail="Không tìm thấy thiết bị cửa trong hệ thống.")
 
-    # 2. Extract features from image_base64 via AI Microservice if face_vector not provided
-    if payload.image_base64 and (not payload.face_vector or len(payload.face_vector) == 0):
+    # 2. Extract features from image_base64 via AI Microservice (InsightFace SCRFD + ArcFace 512D)
+    if payload.image_base64:
         try:
             ai_pipe = await ai_client.run_pipeline(payload.image_base64, check_liveness=True)
             if ai_pipe and ai_pipe.get("face_detected"):
-                payload.face_vector = ai_pipe.get("embedding")
+                emb = ai_pipe.get("embedding")
+                if emb and len(emb) == 512:
+                    payload.face_vector = emb
                 if payload.liveness_passed is None:
                     payload.liveness_passed = ai_pipe.get("liveness_passed", True)
                     payload.liveness_score = ai_pipe.get("liveness_score", 1.0)
                 if ai_pipe.get("face_count", 1) > 1:
                     payload.face_count = ai_pipe.get("face_count")
         except Exception as e:
-            logger.debug(f"AI Service pipeline extraction skipped: {e}")
+            logger.warning(f"AI Service pipeline extraction skipped/fallback: {e}")
 
     # 3. Check multiple faces detected
     if payload.face_count and payload.face_count > 1:
@@ -319,9 +350,9 @@ async def verify_recognition(
                         if pg_sim >= threshold_val:
                             face_profile = candidate[0]
                             best_similarity = pg_sim
-                            user = db.query(User).filter(User.id == face_profile.user_id).first()
+                            user = db.query(User).filter(User.id == face_profile.user_id, User.is_deleted == False).first()
                             if not user:
-                                user = db.query(User).filter(User.employee_id == face_profile.employee_id).first()
+                                user = db.query(User).filter(User.employee_id == face_profile.employee_id, User.is_deleted == False).first()
             except Exception as e:
                 logger.debug(f"pgvector similarity search fallback to python comparison: {e}")
 
@@ -340,9 +371,9 @@ async def verify_recognition(
                         best_profile = prof
 
             if best_profile and highest_sim >= threshold_val:
-                user = db.query(User).filter(User.id == best_profile.user_id).first()
+                user = db.query(User).filter(User.id == best_profile.user_id, User.is_deleted == False).first()
                 if not user:
-                    user = db.query(User).filter(User.employee_id == best_profile.employee_id).first()
+                    user = db.query(User).filter(User.employee_id == best_profile.employee_id, User.is_deleted == False).first()
                 face_profile = best_profile
                 best_similarity = highest_sim
             else:
@@ -350,7 +381,7 @@ async def verify_recognition(
 
     # 4b. Direct employee_id matching if specified
     if not user and payload.employee_id:
-        user = db.query(User).filter(User.employee_id == payload.employee_id).first()
+        user = db.query(User).filter(User.employee_id == payload.employee_id, User.is_deleted == False).first()
         if user:
             face_profile = db.query(FaceProfile).filter(FaceProfile.user_id == user.id).first()
             best_similarity = (payload.simulated_confidence / 100.0) if payload.simulated_confidence else 0.968
@@ -537,7 +568,18 @@ async def verify_recognition(
             dept = user.department
             emp_id = user.employee_id
             door_unlocked = True
+            # Auto-lock delay from DB settings or door definition
             auto_lock_time = door.unlock_duration or 10
+            if "door_unlock_duration" in sys_settings:
+                try:
+                    auto_lock_time = int(sys_settings["door_unlock_duration"])
+                except (ValueError, TypeError):
+                    pass
+            elif "auto_lock_delay" in sys_settings:
+                try:
+                    auto_lock_time = int(sys_settings["auto_lock_delay"])
+                except (ValueError, TypeError):
+                    pass
             message = f"Xác thực thành công! Cấp quyền ra vào qua {door.name}. Cửa mở trong {auto_lock_time} giây."
 
             # Update door state in DB
@@ -546,7 +588,7 @@ async def verify_recognition(
             door.last_user_name = user.full_name
 
     # 6. Create AccessLog entry in PostgreSQL
-    auto_lock_sec = door.unlock_duration or 10
+    auto_lock_sec = auto_lock_time if door_unlocked else (door.unlock_duration or 10)
     log = AccessLog(
         timestamp=now,
         user_id=user.id if user else None,

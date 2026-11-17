@@ -16,14 +16,7 @@ from app.schemas.common import SystemSettingsOut, SystemSettingsUpdate
 router = APIRouter()
 
 
-@router.get("", response_model=SystemSettingsOut)
-def get_settings(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> Any:
-    """
-    Retrieve all system settings from database as a dictionary.
-    """
+def _get_settings_dict(db: Session) -> Dict[str, Any]:
     rows = db.query(SystemSetting).all()
     settings_dict = {}
     for r in rows:
@@ -53,7 +46,18 @@ def get_settings(
         if k not in settings_dict:
             settings_dict[k] = v
 
-    return SystemSettingsOut(settings=settings_dict)
+    return settings_dict
+
+
+@router.get("", response_model=SystemSettingsOut)
+def get_settings(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Any:
+    """
+    Retrieve all system settings from database as a dictionary.
+    """
+    return SystemSettingsOut(settings=_get_settings_dict(db))
 
 
 @router.put("", response_model=SystemSettingsOut)
@@ -90,4 +94,4 @@ def update_settings(
     db.add(audit)
     db.commit()
 
-    return get_settings(db)
+    return SystemSettingsOut(settings=_get_settings_dict(db))
